@@ -5,7 +5,7 @@ let cachedToken: { token: string; expiresAt: number } | null = null
 /**
  * Get Management API access token with caching
  */
-async function getManagementToken(): Promise<string> {
+export async function getManagementToken(): Promise<string> {
   // Return cached token if still valid
   if (cachedToken && cachedToken.expiresAt > Date.now()) {
     return cachedToken.token

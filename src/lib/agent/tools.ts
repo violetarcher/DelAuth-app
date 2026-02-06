@@ -7,6 +7,7 @@
 
 import axios from 'axios'
 import { checkPermission } from '@/lib/fga/checks'
+import { assignRole as writeFGARole } from '@/lib/fga/writes'
 import { FGAPermission } from '@/types/fga'
 import { normalizeToUserId, isEmail, resolveUserIdentifier } from '@/lib/auth0/user-resolver'
 
@@ -66,13 +67,48 @@ export async function getMyInfo(
   context: AgentContext
 ): Promise<ToolResult> {
   try {
+    // Get M2M token for Management API
+    const mgmtToken = await getManagementToken()
+
+    // Fetch full user details from Auth0
+    const userResponse = await axios.get(
+      `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/users/${encodeURIComponent(context.userId)}`,
+      {
+        headers: {
+          Authorization: `Bearer ${mgmtToken}`,
+        },
+      }
+    )
+
+    const user = userResponse.data
+
+    // Get user's roles in organization
+    const rolesResponse = await axios.get(
+      `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/organizations/${context.organizationId}/members/${encodeURIComponent(context.userId)}/roles`,
+      {
+        headers: {
+          Authorization: `Bearer ${mgmtToken}`,
+        },
+      }
+    )
+
+    const roles = rolesResponse.data
+
     return {
       success: true,
       data: {
-        userId: context.userId,
-        email: context.userEmail,
-        name: context.userName,
+        name: user.name || 'Unknown',
+        email: user.email,
+        emailVerified: user.email_verified,
+        userId: user.user_id,
+        nickname: user.nickname,
+        givenName: user.given_name,
+        familyName: user.family_name,
         organizationId: context.organizationId,
+        roles: roles.map((r: any) => r.name),
+        lastLogin: user.last_login,
+        loginsCount: user.logins_count,
+        createdAt: user.created_at,
       },
     }
   } catch (error: any) {
@@ -245,18 +281,65 @@ export async function addMember(
 
     // Assign roles if provided
     if (roles && roles.length > 0) {
-      await axios.post(
-        `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/organizations/${context.organizationId}/members/${userId}/roles`,
-        {
-          roles: roles,
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${mgmtToken}`,
-            'Content-Type': 'application/json',
-          },
+      // Process each role - handle both role IDs and role names
+      for (const role of roles) {
+        let roleId: string
+        let roleName: 'super_admin' | 'admin' | 'support' | 'member'
+
+        // Check if this looks like a role ID (starts with 'rol_') or a role name
+        if (role.startsWith('rol_')) {
+          // It's an Auth0 role ID - fetch the name
+          const roleResponse = await axios.get(
+            `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/roles/${role}`,
+            {
+              headers: {
+                Authorization: `Bearer ${mgmtToken}`,
+              },
+            }
+          )
+          roleId = role
+          roleName = roleResponse.data.name as 'super_admin' | 'admin' | 'support' | 'member'
+        } else {
+          // It's a role name - need to find the role ID
+          const rolesResponse = await axios.get(
+            `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/roles`,
+            {
+              headers: {
+                Authorization: `Bearer ${mgmtToken}`,
+              },
+              params: {
+                name_filter: role,
+              },
+            }
+          )
+
+          const matchingRole = rolesResponse.data.roles?.find((r: any) => r.name === role)
+          if (!matchingRole) {
+            console.warn(`Role not found: ${role}`)
+            continue
+          }
+
+          roleId = matchingRole.id
+          roleName = role as 'super_admin' | 'admin' | 'support' | 'member'
         }
-      )
+
+        // Assign role in Auth0 organization
+        await axios.post(
+          `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/organizations/${context.organizationId}/members/${userId}/roles`,
+          {
+            roles: [roleId],
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${mgmtToken}`,
+              'Content-Type': 'application/json',
+            },
+          }
+        )
+
+        // Write FGA tuple
+        await writeFGARole(userId, context.organizationId, roleName)
+      }
     }
 
     return {
@@ -299,22 +382,22 @@ export async function updateMemberRoles(
     // Get user details for display
     const userInfo = await resolveUserIdentifier(userIdentifier)
 
-    // Check FGA permission
-    const hasPermission = await checkPermission(
-      context.userId,
-      context.organizationId,
-      'can_update_roles'
-    )
-
-    if (!hasPermission) {
-      return {
-        success: false,
-        error: 'You do not have permission to update member roles',
-      }
-    }
-
-    // Require CIBA verification for this sensitive operation
+    // Check FGA permission (only if not already verified via CIBA)
     if (!cibaVerified) {
+      const hasPermission = await checkPermission(
+        context.userId,
+        context.organizationId,
+        'can_update_roles'
+      )
+
+      if (!hasPermission) {
+        return {
+          success: false,
+          error: 'You do not have permission to update member roles',
+        }
+      }
+
+      // Require CIBA verification for this sensitive operation
       return {
         success: false,
         requiresCIBA: true,
@@ -383,22 +466,23 @@ export async function removeMember(
     // Get user details for display
     const userInfo = await resolveUserIdentifier(userIdentifier)
 
-    // Check FGA permission
-    const hasPermission = await checkPermission(
-      context.userId,
-      context.organizationId,
-      'can_remove_member'
-    )
-
-    if (!hasPermission) {
-      return {
-        success: false,
-        error: 'You do not have permission to remove members',
-      }
-    }
-
-    // Require CIBA verification
+    // Check FGA permission (only if not already verified via CIBA)
+    // Once CIBA is approved, we know permission was already checked
     if (!cibaVerified) {
+      const hasPermission = await checkPermission(
+        context.userId,
+        context.organizationId,
+        'can_remove_member'
+      )
+
+      if (!hasPermission) {
+        return {
+          success: false,
+          error: 'You do not have permission to remove members',
+        }
+      }
+
+      // Require CIBA verification
       return {
         success: false,
         requiresCIBA: true,
@@ -466,22 +550,22 @@ export async function deleteMember(
     // Get user details for display
     const userInfo = await resolveUserIdentifier(userIdentifier)
 
-    // Check FGA permission
-    const hasPermission = await checkPermission(
-      context.userId,
-      context.organizationId,
-      'can_delete'
-    )
-
-    if (!hasPermission) {
-      return {
-        success: false,
-        error: 'You do not have permission to delete members (requires super_admin)',
-      }
-    }
-
-    // Require CIBA verification
+    // Check FGA permission (only if not already verified via CIBA)
     if (!cibaVerified) {
+      const hasPermission = await checkPermission(
+        context.userId,
+        context.organizationId,
+        'can_delete'
+      )
+
+      if (!hasPermission) {
+        return {
+          success: false,
+          error: 'You do not have permission to delete members (requires super_admin)',
+        }
+      }
+
+      // Require CIBA verification
       return {
         success: false,
         requiresCIBA: true,
@@ -545,22 +629,22 @@ export async function resetMemberMFA(
     // Get user details for display
     const userInfo = await resolveUserIdentifier(userIdentifier)
 
-    // Check FGA permission
-    const hasPermission = await checkPermission(
-      context.userId,
-      context.organizationId,
-      'can_reset_mfa'
-    )
-
-    if (!hasPermission) {
-      return {
-        success: false,
-        error: 'You do not have permission to reset MFA',
-      }
-    }
-
-    // Require CIBA verification
+    // Check FGA permission (only if not already verified via CIBA)
     if (!cibaVerified) {
+      const hasPermission = await checkPermission(
+        context.userId,
+        context.organizationId,
+        'can_reset_mfa'
+      )
+
+      if (!hasPermission) {
+        return {
+          success: false,
+          error: 'You do not have permission to reset MFA',
+        }
+      }
+
+      // Require CIBA verification
       return {
         success: false,
         requiresCIBA: true,
@@ -595,6 +679,15 @@ export async function resetMemberMFA(
     }
   } catch (error: any) {
     console.error('resetMemberMFA error:', error)
+
+    // Handle 404 error specifically - usually means no MFA enrolled
+    if (error.response?.status === 404) {
+      return {
+        success: false,
+        error: `No MFA enrollments found for ${userIdentifier}. The user may not have MFA enabled yet.`,
+      }
+    }
+
     return {
       success: false,
       error: error.response?.data?.message || 'Failed to reset MFA',
@@ -651,7 +744,7 @@ export const agentTools = [
     function: {
       name: 'get_my_info',
       description:
-        'Get information about the current authenticated user including their user ID, email, name, and organization.',
+        'Get comprehensive profile information about the current authenticated user. Returns: name, email (with verification status), user ID, nickname, roles in organization, login statistics, and account creation date. Use this when user asks "who am I", "my profile", "my info", etc. Format the response as a clean profile card with sections.',
       parameters: {
         type: 'object',
         properties: {},
@@ -698,7 +791,7 @@ export const agentTools = [
     function: {
       name: 'add_member',
       description:
-        'Add an existing Auth0 user to the organization. Accepts either email address or user ID. Requires can_add_member permission.',
+        'Add an existing Auth0 user to the organization. Accepts either email address or user ID. Requires can_add_member permission. This will add the member to both Auth0 organization and FGA.',
       parameters: {
         type: 'object',
         properties: {
@@ -709,7 +802,7 @@ export const agentTools = [
           roles: {
             type: 'array',
             items: { type: 'string' },
-            description: 'Array of role IDs to assign',
+            description: 'Array of role names to assign (e.g., "admin", "support", "member")',
           },
         },
         required: ['userId'],

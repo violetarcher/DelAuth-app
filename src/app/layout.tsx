@@ -9,6 +9,10 @@ const inter = Inter({ subsets: ['latin'] })
 export const metadata: Metadata = {
   title: 'Delegated Administration & Support',
   description: 'Organization member management with Auth0 and FGA',
+  icons: {
+    icon: '/icon.svg',
+  },
+  themeColor: '#2563eb',
 }
 
 export default function RootLayout({

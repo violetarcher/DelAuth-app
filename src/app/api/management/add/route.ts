@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@auth0/nextjs-auth0'
-import { addMemberToOrganization, searchUsersByEmail } from '@/lib/auth0/management'
+import { addMemberToOrganization, searchUsersByEmail, getManagementToken } from '@/lib/auth0/management'
 import { canAddMember } from '@/lib/fga/checks'
 import { assignRole } from '@/lib/fga/writes'
 import { z } from 'zod'
+import axios from 'axios'
 
 const addMemberSchema = z.object({
   email: z.string().email(),
@@ -46,13 +47,57 @@ export async function POST(request: NextRequest) {
 
     const user = users[0]
 
-    // Add member to organization
-    await addMemberToOrganization(organizationId, user.user_id, roles)
+    // Add member to organization (without roles first)
+    await addMemberToOrganization(organizationId, user.user_id)
 
-    // Add roles to FGA if specified
+    // Get management token for role operations
+    const mgmtToken = await getManagementToken()
+
+    // Process roles if specified - map role names to Auth0 role IDs
     if (roles && roles.length > 0) {
-      for (const role of roles) {
-        await assignRole(user.user_id, organizationId, role as any)
+      for (const roleName of roles) {
+        // Find Auth0 role ID by name
+        const rolesResponse = await axios.get(
+          `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/roles`,
+          {
+            headers: {
+              Authorization: `Bearer ${mgmtToken}`,
+            },
+            params: {
+              name_filter: roleName,
+            },
+          }
+        )
+
+        const matchingRole = rolesResponse.data.roles?.find(
+          (r: any) => r.name === roleName
+        )
+
+        if (!matchingRole) {
+          console.warn(`Role not found: ${roleName}`)
+          continue
+        }
+
+        // Assign role in Auth0 organization
+        await axios.post(
+          `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/organizations/${organizationId}/members/${user.user_id}/roles`,
+          {
+            roles: [matchingRole.id],
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${mgmtToken}`,
+              'Content-Type': 'application/json',
+            },
+          }
+        )
+
+        // Write FGA tuple
+        await assignRole(
+          user.user_id,
+          organizationId,
+          roleName as 'super_admin' | 'admin' | 'support' | 'member'
+        )
       }
     }
 

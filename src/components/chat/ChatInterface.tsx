@@ -149,14 +149,59 @@ export function ChatInterface({ organizationId, userId }: ChatInterfaceProps) {
     }
   }
 
-  const handleCIBAApprove = () => {
+  const handleCIBAApprove = async () => {
     if (!cibaRequest) return
 
-    toast.success('Guardian approval simulated (CIBA integration pending)')
+    try {
+      setLoading(true)
 
-    // Resend the message with CIBA verification flag
-    handleSend(cibaRequest.pendingMessage, true)
-    setCibaRequest(null)
+      // Show loading toast
+      const toastId = toast.loading('Sending Guardian Push notification to your phone...')
+
+      // Call CIBA endpoint to initiate Guardian Push
+      const response = await fetch('/api/ciba/request', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          action: cibaRequest.operation,
+          targetUserId: cibaRequest.data?.userId,
+        }),
+      })
+
+      const data = await response.json()
+
+      if (response.ok && data.success) {
+        // CIBA approved!
+        toast.success('Guardian Push approved! Executing operation...', { id: toastId })
+
+        // Resend the message with CIBA verification flag
+        await handleSend(cibaRequest.pendingMessage, true)
+        setCibaRequest(null)
+      } else {
+        // CIBA failed or denied
+        toast.error(
+          data.error_description || 'Guardian Push was denied or timed out',
+          { id: toastId }
+        )
+
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: 'assistant',
+            content: `Operation cancelled: ${data.error_description || 'Guardian Push not approved'}`,
+          },
+        ])
+
+        setCibaRequest(null)
+      }
+    } catch (error) {
+      console.error('CIBA approval error:', error)
+      toast.error('Failed to initiate Guardian Push. Please try again.')
+    } finally {
+      setLoading(false)
+    }
   }
 
   const handleCIBACancel = () => {

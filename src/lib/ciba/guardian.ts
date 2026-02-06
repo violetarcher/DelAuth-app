@@ -20,26 +20,48 @@ export async function initiateCIBARequest(
   bindingMessage?: string
 ): Promise<CIBAInitiateResponse> {
   try {
+    console.log('🔐 Initiating CIBA request for user:', userId)
+    console.log('   Binding message:', bindingMessage)
+
+    // Auth0 CIBA endpoint requires application/x-www-form-urlencoded
+    const params = new URLSearchParams()
+    params.append('client_id', process.env.AUTH0_CLIENT_ID!)
+    params.append('client_secret', process.env.AUTH0_CLIENT_SECRET!)
+    params.append('scope', 'openid profile email')
+    params.append('binding_message', bindingMessage || 'Approve this action')
+    // Auth0 requires login_hint to be a JSON object with format field
+    params.append('login_hint', JSON.stringify({
+      format: 'iss_sub',
+      iss: process.env.AUTH0_ISSUER_BASE_URL + '/',
+      sub: userId
+    }))
+
     const response = await axios.post(
       `${process.env.AUTH0_ISSUER_BASE_URL}/bc-authorize`,
-      {
-        client_id: process.env.AUTH0_CLIENT_ID,
-        client_secret: process.env.AUTH0_CLIENT_SECRET,
-        scope: 'openid profile email',
-        binding_message: bindingMessage || 'Approve this action',
-        login_hint: `sub:${userId}`,
-      },
+      params.toString(),
       {
         headers: {
-          'Content-Type': 'application/json',
+          'Content-Type': 'application/x-www-form-urlencoded',
         },
       }
     )
 
+    console.log('✅ CIBA request initiated successfully')
+    console.log('   auth_req_id:', response.data.auth_req_id)
+    console.log('   expires_in:', response.data.expires_in)
+
     return response.data
-  } catch (error) {
-    console.error('CIBA initiation error:', error)
-    throw new Error('Failed to initiate CIBA request')
+  } catch (error: any) {
+    console.error('❌ CIBA initiation error:', {
+      message: error.message,
+      status: error.response?.status,
+      data: error.response?.data,
+    })
+    throw new Error(
+      error.response?.data?.error_description ||
+      error.response?.data?.error ||
+      'Failed to initiate CIBA request'
+    )
   }
 }
 
@@ -51,25 +73,33 @@ export async function pollCIBAToken(
   maxAttempts: number = 30,
   intervalSeconds: number = 5
 ): Promise<CIBATokenResponse> {
+  console.log('🔄 Starting CIBA polling...')
+  console.log(`   Max attempts: ${maxAttempts}, Interval: ${intervalSeconds}s`)
+
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
+      console.log(`   Polling attempt ${attempt + 1}/${maxAttempts}...`)
+
+      // Auth0 token endpoint requires application/x-www-form-urlencoded
+      const tokenParams = new URLSearchParams()
+      tokenParams.append('grant_type', 'urn:openid:params:grant-type:ciba')
+      tokenParams.append('client_id', process.env.AUTH0_CLIENT_ID!)
+      tokenParams.append('client_secret', process.env.AUTH0_CLIENT_SECRET!)
+      tokenParams.append('auth_req_id', authReqId)
+
       const response = await axios.post(
         `${process.env.AUTH0_ISSUER_BASE_URL}/oauth/token`,
-        {
-          grant_type: 'urn:openid:params:grant-type:ciba',
-          client_id: process.env.AUTH0_CLIENT_ID,
-          client_secret: process.env.AUTH0_CLIENT_SECRET,
-          auth_req_id: authReqId,
-        },
+        tokenParams.toString(),
         {
           headers: {
-            'Content-Type': 'application/json',
+            'Content-Type': 'application/x-www-form-urlencoded',
           },
         }
       )
 
       // Success - token received
       if (response.data.access_token) {
+        console.log('✅ CIBA approved! Token received.')
         return response.data
       }
     } catch (error: any) {
@@ -77,6 +107,7 @@ export async function pollCIBAToken(
 
       // Still pending - continue polling
       if (errorCode === 'authorization_pending') {
+        console.log('   ⏳ Authorization still pending, waiting...')
         await new Promise((resolve) =>
           setTimeout(resolve, intervalSeconds * 1000)
         )
@@ -85,6 +116,7 @@ export async function pollCIBAToken(
 
       // Slow down polling
       if (errorCode === 'slow_down') {
+        console.log('   🐌 Slow down requested, increasing interval...')
         await new Promise((resolve) =>
           setTimeout(resolve, (intervalSeconds + 5) * 1000)
         )
@@ -93,6 +125,7 @@ export async function pollCIBAToken(
 
       // Other errors - stop polling
       if (errorCode === 'access_denied') {
+        console.log('   ❌ User denied the authentication request')
         return {
           error: 'access_denied',
           error_description: 'User denied the authentication request',
@@ -100,6 +133,7 @@ export async function pollCIBAToken(
       }
 
       if (errorCode === 'expired_token') {
+        console.log('   ⏰ Authentication request expired')
         return {
           error: 'expired_token',
           error_description: 'Authentication request expired',
@@ -107,11 +141,16 @@ export async function pollCIBAToken(
       }
 
       // Unknown error
+      console.error('   ❌ Unknown CIBA polling error:', {
+        errorCode,
+        data: error.response?.data,
+      })
       throw error
     }
   }
 
   // Timeout
+  console.log('   ⏰ CIBA polling timed out after', maxAttempts, 'attempts')
   return {
     error: 'timeout',
     error_description: 'Authentication request timed out',

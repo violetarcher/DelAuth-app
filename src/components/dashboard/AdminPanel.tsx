@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { MemberList } from '../admin/MemberList'
 import { MemberSearch } from '../admin/MemberSearch'
-import { FGAVisualizer } from '../fga/FGAVisualizer'
+import { FGAActivityPanel } from '../fga/FGAActivityPanel'
 
 interface AdminPanelProps {
   userId: string
@@ -32,12 +32,8 @@ export function AdminPanel({ userId, organizationId }: AdminPanelProps) {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
-        {/* FGA Permissions Visualizer */}
-        <FGAVisualizer
-          userId={userId}
-          organizationId={organizationId}
-          refreshTrigger={refreshTrigger}
-        />
+        {/* FGA Activity Monitor - Always Visible */}
+        <FGAActivityPanel />
 
         {/* Search */}
         <MemberSearch

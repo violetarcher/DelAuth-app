@@ -1,4 +1,5 @@
 import { getFGAClient, formatFGAUser, formatFGAOrganization } from './client'
+import { fgaActivityLogger } from './activity-logger'
 import type { FGARelation, FGACheckRequest, FGABatchCheckRequest } from '@/types/fga'
 
 /**
@@ -9,18 +10,34 @@ export async function checkPermission(
   organizationId: string,
   relation: FGARelation
 ): Promise<boolean> {
+  const formattedUser = formatFGAUser(userId)
+  const formattedObject = formatFGAOrganization(organizationId)
+
   try {
     const client = getFGAClient()
 
     const { allowed } = await client.check({
-      user: formatFGAUser(userId),
+      user: formattedUser,
       relation,
-      object: formatFGAOrganization(organizationId),
+      object: formattedObject,
     })
+
+    // Log the check operation
+    fgaActivityLogger.logCheck(formattedUser, relation, formattedObject, allowed || false)
 
     return allowed || false
   } catch (error) {
     console.error('FGA check error:', error)
+
+    // Log the error
+    fgaActivityLogger.logError(
+      'check',
+      formattedUser,
+      relation,
+      formattedObject,
+      error instanceof Error ? error.message : 'Unknown error'
+    )
+
     return false
   }
 }

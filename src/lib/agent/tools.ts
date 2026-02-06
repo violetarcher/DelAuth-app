@@ -8,6 +8,7 @@
 import axios from 'axios'
 import { checkPermission } from '@/lib/fga/checks'
 import { FGAPermission } from '@/types/fga'
+import { normalizeToUserId, isEmail, resolveUserIdentifier } from '@/lib/auth0/user-resolver'
 
 export interface AgentContext {
   userId: string
@@ -191,10 +192,11 @@ export async function inviteMember(
 
 /**
  * Add existing user to organization (requires can_add_member permission)
+ * Accepts either email or user ID
  */
 export async function addMember(
   context: AgentContext,
-  userId: string,
+  userIdentifier: string,
   roles: string[]
 ): Promise<ToolResult> {
   try {
@@ -211,6 +213,18 @@ export async function addMember(
         error: 'You do not have permission to add members',
       }
     }
+
+    // Resolve email to user ID if needed
+    const userId = await normalizeToUserId(userIdentifier)
+    if (!userId) {
+      return {
+        success: false,
+        error: `Could not find user with identifier: ${userIdentifier}`,
+      }
+    }
+
+    // Get user details for response
+    const userInfo = await resolveUserIdentifier(userIdentifier)
 
     // Get M2M token for Management API
     const mgmtToken = await getManagementToken()
@@ -247,7 +261,11 @@ export async function addMember(
 
     return {
       success: true,
-      data: response.data,
+      data: {
+        ...response.data,
+        userEmail: userInfo?.email,
+        userId: userId,
+      },
     }
   } catch (error: any) {
     console.error('addMember error:', error)
@@ -260,14 +278,27 @@ export async function addMember(
 
 /**
  * Update member roles (requires can_update_roles permission + CIBA verification)
+ * Accepts either email or user ID
  */
 export async function updateMemberRoles(
   context: AgentContext,
-  userId: string,
+  userIdentifier: string,
   roles: string[],
   cibaVerified: boolean = false
 ): Promise<ToolResult> {
   try {
+    // Resolve email to user ID if needed
+    const userId = await normalizeToUserId(userIdentifier)
+    if (!userId) {
+      return {
+        success: false,
+        error: `Could not find user with identifier: ${userIdentifier}`,
+      }
+    }
+
+    // Get user details for display
+    const userInfo = await resolveUserIdentifier(userIdentifier)
+
     // Check FGA permission
     const hasPermission = await checkPermission(
       context.userId,
@@ -288,7 +319,11 @@ export async function updateMemberRoles(
         success: false,
         requiresCIBA: true,
         cibaOperation: 'update_member_roles',
-        data: { userId, roles },
+        data: {
+          userId,
+          roles,
+          userEmail: userInfo?.email,
+        },
       }
     }
 
@@ -311,7 +346,11 @@ export async function updateMemberRoles(
 
     return {
       success: true,
-      data: response.data,
+      data: {
+        ...response.data,
+        userEmail: userInfo?.email,
+        userId: userId,
+      },
     }
   } catch (error: any) {
     console.error('updateMemberRoles error:', error)
@@ -324,13 +363,26 @@ export async function updateMemberRoles(
 
 /**
  * Remove member from organization (requires can_remove_member permission + CIBA)
+ * Accepts either email or user ID
  */
 export async function removeMember(
   context: AgentContext,
-  userId: string,
+  userIdentifier: string,
   cibaVerified: boolean = false
 ): Promise<ToolResult> {
   try {
+    // Resolve email to user ID if needed
+    const userId = await normalizeToUserId(userIdentifier)
+    if (!userId) {
+      return {
+        success: false,
+        error: `Could not find user with identifier: ${userIdentifier}`,
+      }
+    }
+
+    // Get user details for display
+    const userInfo = await resolveUserIdentifier(userIdentifier)
+
     // Check FGA permission
     const hasPermission = await checkPermission(
       context.userId,
@@ -351,7 +403,10 @@ export async function removeMember(
         success: false,
         requiresCIBA: true,
         cibaOperation: 'remove_member',
-        data: { userId },
+        data: {
+          userId,
+          userEmail: userInfo?.email,
+        },
       }
     }
 
@@ -374,7 +429,11 @@ export async function removeMember(
 
     return {
       success: true,
-      data: { message: 'Member removed successfully' },
+      data: {
+        message: `Member ${userInfo?.email || userId} removed successfully`,
+        userEmail: userInfo?.email,
+        userId: userId,
+      },
     }
   } catch (error: any) {
     console.error('removeMember error:', error)
@@ -387,13 +446,26 @@ export async function removeMember(
 
 /**
  * Delete user completely (requires can_delete permission + CIBA)
+ * Accepts either email or user ID
  */
 export async function deleteMember(
   context: AgentContext,
-  userId: string,
+  userIdentifier: string,
   cibaVerified: boolean = false
 ): Promise<ToolResult> {
   try {
+    // Resolve email to user ID if needed
+    const userId = await normalizeToUserId(userIdentifier)
+    if (!userId) {
+      return {
+        success: false,
+        error: `Could not find user with identifier: ${userIdentifier}`,
+      }
+    }
+
+    // Get user details for display
+    const userInfo = await resolveUserIdentifier(userIdentifier)
+
     // Check FGA permission
     const hasPermission = await checkPermission(
       context.userId,
@@ -414,7 +486,10 @@ export async function deleteMember(
         success: false,
         requiresCIBA: true,
         cibaOperation: 'delete_member',
-        data: { userId },
+        data: {
+          userId,
+          userEmail: userInfo?.email,
+        },
       }
     }
 
@@ -433,7 +508,11 @@ export async function deleteMember(
 
     return {
       success: true,
-      data: { message: 'Member deleted successfully' },
+      data: {
+        message: `User ${userInfo?.email || userId} deleted permanently`,
+        userEmail: userInfo?.email,
+        userId: userId,
+      },
     }
   } catch (error: any) {
     console.error('deleteMember error:', error)
@@ -446,13 +525,26 @@ export async function deleteMember(
 
 /**
  * Reset member MFA (requires can_reset_mfa permission + CIBA)
+ * Accepts either email or user ID
  */
 export async function resetMemberMFA(
   context: AgentContext,
-  userId: string,
+  userIdentifier: string,
   cibaVerified: boolean = false
 ): Promise<ToolResult> {
   try {
+    // Resolve email to user ID if needed
+    const userId = await normalizeToUserId(userIdentifier)
+    if (!userId) {
+      return {
+        success: false,
+        error: `Could not find user with identifier: ${userIdentifier}`,
+      }
+    }
+
+    // Get user details for display
+    const userInfo = await resolveUserIdentifier(userIdentifier)
+
     // Check FGA permission
     const hasPermission = await checkPermission(
       context.userId,
@@ -473,7 +565,10 @@ export async function resetMemberMFA(
         success: false,
         requiresCIBA: true,
         cibaOperation: 'reset_mfa',
-        data: { userId },
+        data: {
+          userId,
+          userEmail: userInfo?.email,
+        },
       }
     }
 
@@ -492,7 +587,11 @@ export async function resetMemberMFA(
 
     return {
       success: true,
-      data: { message: 'MFA reset successfully' },
+      data: {
+        message: `MFA reset for ${userInfo?.email || userId}`,
+        userEmail: userInfo?.email,
+        userId: userId,
+      },
     }
   } catch (error: any) {
     console.error('resetMemberMFA error:', error)
@@ -599,13 +698,13 @@ export const agentTools = [
     function: {
       name: 'add_member',
       description:
-        'Add an existing Auth0 user to the organization. Requires can_add_member permission.',
+        'Add an existing Auth0 user to the organization. Accepts either email address or user ID. Requires can_add_member permission.',
       parameters: {
         type: 'object',
         properties: {
           userId: {
             type: 'string',
-            description: 'Auth0 user ID (e.g., auth0|123...)',
+            description: 'User email address (e.g., user@example.com) or Auth0 user ID (e.g., auth0|123...)',
           },
           roles: {
             type: 'array',
@@ -622,13 +721,13 @@ export const agentTools = [
     function: {
       name: 'update_member_roles',
       description:
-        'Update roles for an organization member. Requires can_update_roles permission and CIBA verification.',
+        'Update roles for an organization member. Accepts either email address or user ID. Requires can_update_roles permission and CIBA verification.',
       parameters: {
         type: 'object',
         properties: {
           userId: {
             type: 'string',
-            description: 'Auth0 user ID of the member',
+            description: 'User email address (e.g., user@example.com) or Auth0 user ID (e.g., auth0|123...)',
           },
           roles: {
             type: 'array',
@@ -645,13 +744,13 @@ export const agentTools = [
     function: {
       name: 'remove_member',
       description:
-        'Remove a member from the organization. Requires can_remove_member permission and CIBA verification.',
+        'Remove a member from the organization. Accepts either email address or user ID. Requires can_remove_member permission and CIBA verification.',
       parameters: {
         type: 'object',
         properties: {
           userId: {
             type: 'string',
-            description: 'Auth0 user ID of the member to remove',
+            description: 'User email address (e.g., user@example.com) or Auth0 user ID (e.g., auth0|123...) of the member to remove',
           },
         },
         required: ['userId'],
@@ -663,13 +762,13 @@ export const agentTools = [
     function: {
       name: 'delete_member',
       description:
-        'Permanently delete a user from Auth0. Requires can_delete permission (super_admin only) and CIBA verification.',
+        'Permanently delete a user from Auth0. Accepts either email address or user ID. Requires can_delete permission (super_admin only) and CIBA verification.',
       parameters: {
         type: 'object',
         properties: {
           userId: {
             type: 'string',
-            description: 'Auth0 user ID to delete',
+            description: 'User email address (e.g., user@example.com) or Auth0 user ID (e.g., auth0|123...) to delete',
           },
         },
         required: ['userId'],
@@ -681,13 +780,13 @@ export const agentTools = [
     function: {
       name: 'reset_member_mfa',
       description:
-        'Reset MFA for a member. Requires can_reset_mfa permission and CIBA verification.',
+        'Reset MFA for a member. Accepts either email address or user ID. Requires can_reset_mfa permission and CIBA verification.',
       parameters: {
         type: 'object',
         properties: {
           userId: {
             type: 'string',
-            description: 'Auth0 user ID of the member',
+            description: 'User email address (e.g., user@example.com) or Auth0 user ID (e.g., auth0|123...) of the member',
           },
         },
         required: ['userId'],

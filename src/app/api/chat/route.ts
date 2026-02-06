@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSession, getAccessToken } from '@auth0/nextjs-auth0'
 import { getOpenAIClient, getSystemPrompt } from '@/lib/openai/client'
 import { agentTools, executeTool, AgentContext } from '@/lib/agent/tools'
+import { completeCIBAFlow } from '@/lib/ciba/guardian'
 import { z } from 'zod'
 
 const chatSchema = z.object({
@@ -118,15 +119,93 @@ export async function POST(request: NextRequest) {
       // Check if any tool requires CIBA
       const cibaRequired = toolResults.some((r) => r.result.requiresCIBA)
 
-      if (cibaRequired) {
-        // Return CIBA requirement to client
+      if (cibaRequired && !cibaVerified) {
+        // Handle CIBA verification server-side
         const cibaResult = toolResults.find((r) => r.result.requiresCIBA)
-        return NextResponse.json({
-          requiresCIBA: true,
-          cibaOperation: cibaResult?.result.cibaOperation,
-          operationData: cibaResult?.result.data,
-          message:
-            'This operation requires verification via your Guardian app. Please approve the request.',
+
+        console.log('🔐 CIBA required, initiating Guardian Push...')
+
+        // Send immediate response to inform user
+        const encoder = new TextEncoder()
+        const stream = new ReadableStream({
+          async start(controller) {
+            try {
+              // Inform user that Guardian Push is being sent
+              const message = '🔐 This operation requires Guardian Push verification. Sending notification to your phone...\n\n'
+              controller.enqueue(encoder.encode(message))
+
+              // Initiate CIBA flow
+              const cibaResponse = await completeCIBAFlow(
+                userId,
+                `Approve: ${cibaResult?.result.cibaOperation}`
+              )
+
+              if (!cibaResponse.success) {
+                const errorMsg = `❌ Guardian Push ${cibaResponse.error === 'access_denied' ? 'denied' : 'failed'}: ${cibaResponse.error_description || cibaResponse.error}\n`
+                controller.enqueue(encoder.encode(errorMsg))
+                controller.close()
+                return
+              }
+
+              console.log('✅ CIBA approved, retrying operation...')
+              controller.enqueue(encoder.encode('✅ Guardian Push approved! Executing operation...\n\n'))
+
+              // Retry the tool with CIBA verification
+              const retryResult = await executeTool(
+                responseMessage.tool_calls![0].function.name,
+                JSON.parse(responseMessage.tool_calls![0].function.arguments),
+                context,
+                true // cibaVerified
+              )
+
+              console.log('Tool result after CIBA:', JSON.stringify(retryResult, null, 2))
+
+              // Build messages with tool results
+              const finalMessages = [
+                ...openaiMessages,
+                {
+                  role: 'assistant' as const,
+                  content: responseMessage.content || '',
+                  tool_calls: responseMessage.tool_calls,
+                },
+                {
+                  role: 'tool' as const,
+                  tool_call_id: responseMessage.tool_calls![0].id,
+                  content: JSON.stringify(retryResult),
+                },
+              ]
+
+              // Get final response from OpenAI
+              const finalStream = await client.chat.completions.create({
+                model: 'gpt-4o-mini',
+                messages: finalMessages,
+                stream: true,
+                temperature: 0.7,
+                max_tokens: 1500,
+              })
+
+              for await (const chunk of finalStream) {
+                const text = chunk.choices[0]?.delta?.content || ''
+                if (text) {
+                  controller.enqueue(encoder.encode(text))
+                }
+              }
+
+              controller.close()
+            } catch (error) {
+              console.error('CIBA flow error:', error)
+              const errorMsg = '❌ An error occurred during verification. Please try again.\n'
+              controller.enqueue(encoder.encode(errorMsg))
+              controller.close()
+            }
+          },
+        })
+
+        return new NextResponse(stream, {
+          headers: {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'Transfer-Encoding': 'chunked',
+          },
         })
       }
 

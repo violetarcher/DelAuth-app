@@ -1,4 +1,5 @@
 import { getFGAClient, formatFGAUser, formatFGAOrganization } from './client'
+import { fgaActivityLogger } from './activity-logger'
 import type { FGARelation } from '@/types/fga'
 
 /**
@@ -9,22 +10,38 @@ export async function writeRelationship(
   organizationId: string,
   relation: FGARelation
 ): Promise<boolean> {
+  const formattedUser = formatFGAUser(userId)
+  const formattedObject = formatFGAOrganization(organizationId)
+
   try {
     const client = getFGAClient()
 
     await client.write({
       writes: [
         {
-          user: formatFGAUser(userId),
+          user: formattedUser,
           relation,
-          object: formatFGAOrganization(organizationId),
+          object: formattedObject,
         },
       ],
     })
 
+    // Log the write operation
+    fgaActivityLogger.logWrite(formattedUser, relation, formattedObject)
+
     return true
   } catch (error) {
     console.error('FGA write error:', error)
+
+    // Log the error
+    fgaActivityLogger.logError(
+      'write',
+      formattedUser,
+      relation,
+      formattedObject,
+      error instanceof Error ? error.message : 'Unknown error'
+    )
+
     return false
   }
 }
@@ -37,22 +54,38 @@ export async function deleteRelationship(
   organizationId: string,
   relation: FGARelation
 ): Promise<boolean> {
+  const formattedUser = formatFGAUser(userId)
+  const formattedObject = formatFGAOrganization(organizationId)
+
   try {
     const client = getFGAClient()
 
     await client.write({
       deletes: [
         {
-          user: formatFGAUser(userId),
+          user: formattedUser,
           relation,
-          object: formatFGAOrganization(organizationId),
+          object: formattedObject,
         },
       ],
     })
 
+    // Log the delete operation
+    fgaActivityLogger.logDelete(formattedUser, relation, formattedObject)
+
     return true
   } catch (error) {
     console.error('FGA delete error:', error)
+
+    // Log the error
+    fgaActivityLogger.logError(
+      'delete',
+      formattedUser,
+      relation,
+      formattedObject,
+      error instanceof Error ? error.message : 'Unknown error'
+    )
+
     return false
   }
 }

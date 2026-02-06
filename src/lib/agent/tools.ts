@@ -7,7 +7,7 @@
 
 import axios from 'axios'
 import { checkPermission } from '@/lib/fga/checks'
-import { assignRole as writeFGARole } from '@/lib/fga/writes'
+import { assignRole as writeFGARole, removeAllUserRoles, updateUserRoles } from '@/lib/fga/writes'
 import { FGAPermission } from '@/types/fga'
 import { normalizeToUserId, isEmail, resolveUserIdentifier } from '@/lib/auth0/user-resolver'
 
@@ -116,6 +116,90 @@ export async function getMyInfo(
     return {
       success: false,
       error: 'Failed to get user info',
+    }
+  }
+}
+
+/**
+ * Get detailed information about a specific member
+ */
+export async function getMemberInfo(
+  context: AgentContext,
+  userIdentifier: string
+): Promise<ToolResult> {
+  try {
+    // Check FGA permission
+    const hasPermission = await checkPermission(
+      context.userId,
+      context.organizationId,
+      'can_view'
+    )
+
+    if (!hasPermission) {
+      return {
+        success: false,
+        error: 'You do not have permission to view members',
+      }
+    }
+
+    // Resolve to user ID
+    const userId = await normalizeToUserId(userIdentifier)
+    if (!userId) {
+      return {
+        success: false,
+        error: `Could not find user with identifier: ${userIdentifier}`,
+      }
+    }
+
+    // Get M2M token for Management API
+    const mgmtToken = await getManagementToken()
+
+    // Fetch full user details from Auth0
+    const userResponse = await axios.get(
+      `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/users/${encodeURIComponent(userId)}`,
+      {
+        headers: {
+          Authorization: `Bearer ${mgmtToken}`,
+        },
+      }
+    )
+
+    const user = userResponse.data
+
+    // Get user's roles in organization
+    const rolesResponse = await axios.get(
+      `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/organizations/${context.organizationId}/members/${encodeURIComponent(userId)}/roles`,
+      {
+        headers: {
+          Authorization: `Bearer ${mgmtToken}`,
+        },
+      }
+    )
+
+    const roles = rolesResponse.data
+
+    return {
+      success: true,
+      data: {
+        name: user.name || 'Unknown',
+        email: user.email,
+        emailVerified: user.email_verified,
+        userId: user.user_id,
+        nickname: user.nickname,
+        givenName: user.given_name,
+        familyName: user.family_name,
+        organizationId: context.organizationId,
+        roles: roles.map((r: any) => r.name),
+        lastLogin: user.last_login,
+        loginsCount: user.logins_count,
+        createdAt: user.created_at,
+      },
+    }
+  } catch (error: any) {
+    console.error('getMemberInfo error:', error)
+    return {
+      success: false,
+      error: error.response?.data?.message || 'Failed to get member info',
     }
   }
 }
@@ -413,26 +497,109 @@ export async function updateMemberRoles(
     // Get M2M token for Management API
     const mgmtToken = await getManagementToken()
 
-    // Update roles via Management API
-    const response = await axios.post(
+    // Get current roles from Auth0
+    const currentRolesResponse = await axios.get(
       `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/organizations/${context.organizationId}/members/${userId}/roles`,
-      {
-        roles: roles,
-      },
       {
         headers: {
           Authorization: `Bearer ${mgmtToken}`,
-          'Content-Type': 'application/json',
         },
       }
     )
+    const currentRoles = currentRolesResponse.data || []
+    const currentRoleNames = currentRoles.map((r: any) => r.name)
+
+    // Process new roles and map to Auth0 role IDs
+    const roleIds: string[] = []
+    const roleNames: Array<'super_admin' | 'admin' | 'support' | 'member'> = []
+
+    for (const role of roles) {
+      // Check if it's a role ID or role name
+      if (role.startsWith('rol_')) {
+        // It's already an Auth0 role ID
+        const roleResponse = await axios.get(
+          `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/roles/${role}`,
+          {
+            headers: {
+              Authorization: `Bearer ${mgmtToken}`,
+            },
+          }
+        )
+        roleIds.push(role)
+        roleNames.push(roleResponse.data.name as any)
+      } else {
+        // It's a role name - need to find the role ID
+        const rolesResponse = await axios.get(
+          `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/roles`,
+          {
+            headers: {
+              Authorization: `Bearer ${mgmtToken}`,
+            },
+            params: {
+              name_filter: role,
+            },
+          }
+        )
+        const matchingRole = rolesResponse.data.roles?.find((r: any) => r.name === role)
+        if (matchingRole) {
+          roleIds.push(matchingRole.id)
+          roleNames.push(role as any)
+        }
+      }
+    }
+
+    // Calculate roles to add and remove in Auth0
+    const rolesToAdd = roleIds.filter((_, index) => !currentRoleNames.includes(roleNames[index]))
+    const currentRoleIds = currentRoles.map((r: any) => r.id)
+    const rolesToRemove = currentRoleIds.filter((id: string) => !roleIds.includes(id))
+
+    // Update roles in Auth0
+    if (rolesToRemove.length > 0) {
+      await axios.delete(
+        `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/organizations/${context.organizationId}/members/${userId}/roles`,
+        {
+          headers: {
+            Authorization: `Bearer ${mgmtToken}`,
+            'Content-Type': 'application/json',
+          },
+          data: {
+            roles: rolesToRemove,
+          },
+        }
+      )
+    }
+
+    if (rolesToAdd.length > 0) {
+      await axios.post(
+        `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/organizations/${context.organizationId}/members/${userId}/roles`,
+        {
+          roles: rolesToAdd,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${mgmtToken}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      )
+    }
+
+    // IMPORTANT: Also sync FGA tuples
+    const fgaRolesToAdd = roleNames.filter(name => !currentRoleNames.includes(name)) as Array<'super_admin' | 'admin' | 'support' | 'member'>
+    const fgaRolesToRemove = currentRoleNames.filter((name: string) => !roleNames.includes(name)) as Array<'super_admin' | 'admin' | 'support' | 'member'>
+
+    if (fgaRolesToAdd.length > 0 || fgaRolesToRemove.length > 0) {
+      await updateUserRoles(userId, context.organizationId, fgaRolesToAdd, fgaRolesToRemove)
+    }
 
     return {
       success: true,
       data: {
-        ...response.data,
+        message: `Roles updated for ${userInfo?.email || userId} (Auth0 + FGA synced)`,
         userEmail: userInfo?.email,
         userId: userId,
+        rolesAdded: fgaRolesToAdd,
+        rolesRemoved: fgaRolesToRemove,
       },
     }
   } catch (error: any) {
@@ -511,10 +678,13 @@ export async function removeMember(
       }
     )
 
+    // IMPORTANT: Also delete ALL FGA tuples for this user in this organization
+    await removeAllUserRoles(userId, context.organizationId)
+
     return {
       success: true,
       data: {
-        message: `Member ${userInfo?.email || userId} removed successfully`,
+        message: `Member ${userInfo?.email || userId} removed successfully (Auth0 + FGA tuples deleted)`,
         userEmail: userInfo?.email,
         userId: userId,
       },
@@ -659,9 +829,10 @@ export async function resetMemberMFA(
     // Get M2M token for Management API
     const mgmtToken = await getManagementToken()
 
-    // Reset MFA via Management API
-    await axios.delete(
-      `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/users/${userId}/multifactor/actions/invalidate`,
+    // Use the correct authentication-methods endpoint
+    // Get all authentication methods for the user
+    const authMethodsResponse = await axios.get(
+      `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/users/${encodeURIComponent(userId)}/authentication-methods`,
       {
         headers: {
           Authorization: `Bearer ${mgmtToken}`,
@@ -669,12 +840,50 @@ export async function resetMemberMFA(
       }
     )
 
+    const authMethods = authMethodsResponse.data || []
+
+    // If no authentication methods found, return error
+    if (authMethods.length === 0) {
+      return {
+        success: false,
+        error: `No MFA enrollments found for ${userInfo?.email || userIdentifier}. The user has not enabled MFA yet.`,
+      }
+    }
+
+    // Delete each authentication method individually
+    let deletedCount = 0
+    for (const method of authMethods) {
+      try {
+        await axios.delete(
+          `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/users/${encodeURIComponent(userId)}/authentication-methods/${method.id}`,
+          {
+            headers: {
+              Authorization: `Bearer ${mgmtToken}`,
+            },
+          }
+        )
+        deletedCount++
+      } catch (err: any) {
+        console.error(`Failed to delete authentication method ${method.id}:`, err.message)
+      }
+    }
+
+    // If nothing was deleted, return error
+    if (deletedCount === 0) {
+      return {
+        success: false,
+        error: `Failed to reset MFA for ${userInfo?.email || userIdentifier}. Could not delete authentication methods.`,
+      }
+    }
+
     return {
       success: true,
       data: {
-        message: `MFA reset for ${userInfo?.email || userId}`,
+        message: `MFA reset successful for ${userInfo?.email || userId}. Removed ${deletedCount} of ${authMethods.length} authentication method(s).`,
         userEmail: userInfo?.email,
         userId: userId,
+        methodsDeleted: deletedCount,
+        totalMethods: authMethods.length,
       },
     }
   } catch (error: any) {
@@ -754,6 +963,24 @@ export const agentTools = [
   {
     type: 'function',
     function: {
+      name: 'get_member_info',
+      description:
+        'Get comprehensive profile information about a specific organization member. Returns the same detailed information as get_my_info but for any member: name, email (with verification status), user ID, nickname, roles in organization, login statistics, and account creation date. Use this when user asks about another member like "tell me about member1@atko.email", "who is john@example.com", "show me info for user auth0|123", etc. Format the response as a clean profile card with sections. Requires can_view permission.',
+      parameters: {
+        type: 'object',
+        properties: {
+          userId: {
+            type: 'string',
+            description: 'User email address (e.g., member1@atko.email) or Auth0 user ID (e.g., auth0|123...)',
+          },
+        },
+        required: ['userId'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'list_members',
       description:
         'List all members in the organization. Requires can_view permission.',
@@ -825,7 +1052,7 @@ export const agentTools = [
           roles: {
             type: 'array',
             items: { type: 'string' },
-            description: 'New array of role IDs',
+            description: 'New array of role names (e.g., ["admin", "support"]) - these will be synced to both Auth0 and FGA',
           },
         },
         required: ['userId', 'roles'],
@@ -912,6 +1139,9 @@ export async function executeTool(
   switch (toolName) {
     case 'get_my_info':
       return getMyInfo(context)
+
+    case 'get_member_info':
+      return getMemberInfo(context, args.userId)
 
     case 'list_members':
       return listMembers(context)

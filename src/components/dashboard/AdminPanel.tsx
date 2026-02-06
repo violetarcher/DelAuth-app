@@ -30,18 +30,21 @@ export function AdminPanel({ userId, organizationId }: AdminPanelProps) {
         </p>
       </div>
 
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-6">
-        {/* FGA Activity Monitor - Always Visible */}
+      {/* FGA Activity Monitor - Always Visible (Pinned) */}
+      <div className="bg-gray-50 px-6 pt-6">
         <FGAActivityPanel />
+      </div>
 
-        {/* Search */}
+      {/* Search - Always Visible (Pinned) */}
+      <div className="bg-gray-50 px-6 pt-4">
         <MemberSearch
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
         />
+      </div>
 
-        {/* Member List */}
+      {/* Member List - Scrollable */}
+      <div className="flex-1 overflow-y-auto px-6 pt-4 pb-6">
         <MemberList
           organizationId={organizationId}
           searchQuery={searchQuery}

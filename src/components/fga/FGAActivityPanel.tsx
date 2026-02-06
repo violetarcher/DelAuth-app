@@ -86,7 +86,34 @@ export function FGAActivityPanel() {
       )
     }
 
+    if (type === 'write') {
+      return <CheckCircleIcon className="w-4 h-4 text-green-600" />
+    }
+
+    if (type === 'delete') {
+      return <TrashIcon className="w-4 h-4 text-red-600" />
+    }
+
     return <ClockIcon className="w-4 h-4 text-gray-400" />
+  }
+
+  const getActivityDescription = (activity: FGAActivity) => {
+    const userShort = activity.user.split(':')[1]?.split('|')[1]?.substring(0, 8) || activity.user
+    const objShort = activity.object.split(':')[1] || activity.object
+
+    if (activity.type === 'write') {
+      return `Created tuple: ${userShort} → ${activity.relation} → ${objShort}`
+    }
+
+    if (activity.type === 'delete') {
+      return `Deleted tuple: ${userShort} → ${activity.relation} → ${objShort}`
+    }
+
+    if (activity.type === 'check') {
+      return `Checked: ${userShort} ${activity.relation} ${objShort} ${activity.result ? '✓ granted' : '✗ denied'}`
+    }
+
+    return activity.operation
   }
 
   const latestActivity = activities[0]
@@ -181,11 +208,11 @@ export function FGAActivityPanel() {
 
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="font-mono text-gray-500">
+                      <span className="font-mono text-gray-500 text-[10px]">
                         {formatTimestamp(activity.timestamp)}
                       </span>
                       <span
-                        className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-medium uppercase ${
                           activity.type === 'check'
                             ? 'bg-blue-100 text-blue-700'
                             : activity.type === 'write'
@@ -195,18 +222,9 @@ export function FGAActivityPanel() {
                       >
                         {activity.type}
                       </span>
-                      <span className="font-mono text-gray-700">
-                        {activity.relation}
-                      </span>
-                      {activity.type === 'check' && (
-                        <span
-                          className={`text-xs ${
-                            activity.result ? 'text-green-600' : 'text-gray-500'
-                          }`}
-                        >
-                          {activity.result ? '✓' : '✗'}
-                        </span>
-                      )}
+                    </div>
+                    <div className="text-xs text-gray-700 mt-0.5 font-mono">
+                      {getActivityDescription(activity)}
                     </div>
                   </div>
                 </div>

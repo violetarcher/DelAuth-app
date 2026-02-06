@@ -31,33 +31,31 @@ export function MemberCard({ member, organizationId, onUpdate }: MemberCardProps
 
   return (
     <>
-      <Card padding="md">
-        <div className="flex items-start justify-between">
-          <div className="flex items-start gap-4 flex-1">
-            {/* Avatar */}
+      <Card padding="sm">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 flex-1 min-w-0">
+            {/* Avatar - Smaller */}
             {member.picture ? (
               <img
                 src={member.picture}
                 alt={member.name || member.email}
-                className="h-12 w-12 rounded-full"
+                className="h-10 w-10 rounded-full flex-shrink-0"
               />
             ) : (
-              <div className="h-12 w-12 rounded-full bg-blue-100 flex items-center justify-center">
-                <span className="text-blue-600 font-semibold text-lg">
+              <div className="h-10 w-10 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                <span className="text-blue-600 font-semibold text-base">
                   {(member.name || member.email).charAt(0).toUpperCase()}
                 </span>
               </div>
             )}
 
-            {/* Member Info */}
+            {/* Member Info - More Compact */}
             <div className="flex-1 min-w-0">
-              <h3 className="text-base font-semibold text-gray-900 truncate">
-                {member.name || 'No name'}
-              </h3>
-              <p className="text-sm text-gray-500 truncate">{member.email}</p>
-
-              {/* Roles */}
-              <div className="mt-2 flex flex-wrap gap-2">
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-semibold text-gray-900 truncate">
+                  {member.name || 'No name'}
+                </h3>
+                {/* Roles - Inline */}
                 {member.roles && member.roles.length > 0 ? (
                   member.roles.map((role) => (
                     <Badge
@@ -75,27 +73,17 @@ export function MemberCard({ member, organizationId, onUpdate }: MemberCardProps
                 )}
               </div>
 
-              {/* Additional Info */}
-              {(member.last_login || member.logins_count !== undefined) && (
-                <div className="mt-2 text-xs text-gray-400">
-                  {member.logins_count !== undefined && (
-                    <span>Logins: {member.logins_count}</span>
-                  )}
-                  {member.last_login && member.logins_count !== undefined && (
-                    <span className="mx-2">•</span>
-                  )}
-                  {member.last_login && (
-                    <span>
-                      Last login: {new Date(member.last_login).toLocaleDateString()}
-                    </span>
-                  )}
-                </div>
-              )}
+              <p className="text-xs text-gray-500 truncate mt-0.5">{member.email}</p>
+
+              {/* User ID - Compact */}
+              <p className="text-xs text-gray-400 truncate font-mono">
+                {member.user_id}
+              </p>
             </div>
           </div>
 
-          {/* Action Buttons */}
-          <div className="ml-4">
+          {/* Action Buttons - More Compact */}
+          <div className="flex-shrink-0">
             <ActionButtons
               member={member}
               organizationId={organizationId}

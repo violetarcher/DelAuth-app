@@ -62,7 +62,8 @@ export function MemberList({
     const query = searchQuery.toLowerCase()
     return (
       member.name?.toLowerCase().includes(query) ||
-      member.email.toLowerCase().includes(query)
+      member.email.toLowerCase().includes(query) ||
+      member.user_id.toLowerCase().includes(query)
     )
   })
 
@@ -107,7 +108,7 @@ export function MemberList({
           </p>
         </div>
       ) : (
-        <div className="grid gap-4">
+        <div className="grid gap-2">
           {filteredMembers.map((member) => (
             <MemberCard
               key={member.user_id}

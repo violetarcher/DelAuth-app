@@ -301,6 +301,84 @@ npm run lint
 
 ---
 
+## Recent Updates (February 6, 2026)
+
+### Member Management & FGA Sync Fix
+- **Fixed critical bug**: Members now properly added to BOTH Auth0 organizations AND FGA
+- **Root cause**: `addMember` function was only writing FGA tuples, not adding to Auth0 org
+- **Solution**: Updated both AI agent tools and API routes to:
+  - Add member to Auth0 organization
+  - Map role names to Auth0 role IDs
+  - Assign roles in Auth0
+  - Write corresponding FGA tuples for each role
+- **Impact**: Member additions now properly sync between Auth0 and FGA authorization
+
+### MFA Reset Enhancement
+- **Fixed**: MFA reset now uses correct Auth0 Management API endpoints
+- **Updated endpoints**:
+  - `GET /api/v2/users/{id}/authentication-methods` - List all MFA methods
+  - `DELETE /api/v2/users/{id}/authentication-methods/{id}` - Delete specific method
+- **Improvements**:
+  - Works with ALL MFA types (SMS, TOTP, Guardian, Email OTP)
+  - No pre-check before CIBA (simpler flow)
+  - Clear feedback on what was removed
+  - Proper error messages for users with no MFA
+- **Result**: Successfully resets MFA for all authentication methods, not just Guardian
+
+### UI/UX Improvements
+
+#### Compact Member Cards
+- **Reduced size**: 17% smaller avatars (12x12 → 10x10)
+- **Tighter spacing**: Cards use `gap-2` instead of `gap-4`
+- **Inline layout**: Roles displayed next to name (not separate row)
+- **User ID display**: Shows full user ID in monospace font below email
+- **Searchable**: Can search by name, email, OR user ID
+- **Result**: Fits more members on screen, easier to scan
+
+#### Pinned FGA Inspector
+- **Layout restructure**: FGA Activity Panel always visible at top
+- **Scrollable area**: Only member list scrolls, not FGA inspector
+- **Fixed sections**:
+  1. Header (fixed)
+  2. FGA Inspector (pinned)
+  3. Search bar (pinned)
+  4. Member list (scrollable)
+- **Benefit**: Monitor FGA activity while scrolling through long member lists
+
+#### Enhanced FGA Activity Feed
+- **Stronger feedback**: Shows detailed tuple operations
+  - **Created**: `Created tuple: user123 → admin → org:abc`
+  - **Deleted**: `Deleted tuple: user456 → support → org:abc`
+  - **Checked**: `Checked: user789 can_view org:abc ✓ granted`
+- **Visual improvements**:
+  - Green checkmark icon for tuple creation
+  - Red trash icon for tuple deletion
+  - Descriptive text in Recent Activity feed
+  - Shortened user/org IDs for readability
+- **Result**: Clear visibility into authorization changes
+
+### Favicon Addition
+- **Design**: Blue shield with user icon
+- **Format**: SVG (scales perfectly)
+- **Colors**: Professional blue (#2563eb) matching app theme
+- **Location**: `src/app/icon.svg`
+- **Auto-generated**: Next.js creates all required sizes
+- **Visible in**: Browser tabs, bookmarks, mobile home screen
+
+### AI Agent Enhancements
+- **New tool**: `get_member_info` - Get detailed profile for any member
+- **Uniform output**: Same profile format as "who am I" command
+- **Better MFA handling**: No unnecessary Guardian Push for users without MFA
+- **Improved error messages**: Clear feedback on what operations succeeded/failed
+
+### Code Quality
+- **Exported**: `getManagementToken()` for reuse across modules
+- **Consistent**: Role name/ID handling throughout codebase
+- **Validated**: All changes compile without errors
+- **Tested**: MFA reset, member addition, FGA sync all working
+
+---
+
 ## Future Enhancements
 
 - Dark mode support

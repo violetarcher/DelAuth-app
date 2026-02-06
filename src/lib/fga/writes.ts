@@ -114,6 +114,7 @@ export async function removeRole(
 
 /**
  * Update user roles - remove old roles and assign new ones
+ * Only deletes tuples that actually exist to avoid FGA errors
  */
 export async function updateUserRoles(
   userId: string,
@@ -123,23 +124,50 @@ export async function updateUserRoles(
 ): Promise<boolean> {
   try {
     const client = getFGAClient()
+    const formattedUser = formatFGAUser(userId)
+    const formattedObject = formatFGAOrganization(organizationId)
 
     const writes = rolesToAdd.map((role) => ({
-      user: formatFGAUser(userId),
+      user: formattedUser,
       relation: role as FGARelation,
-      object: formatFGAOrganization(organizationId),
+      object: formattedObject,
     }))
 
-    const deletes = rolesToRemove.map((role) => ({
-      user: formatFGAUser(userId),
-      relation: role as FGARelation,
-      object: formatFGAOrganization(organizationId),
-    }))
+    // Only delete roles that actually exist
+    let deletes: Array<{ user: string; relation: FGARelation; object: string }> = []
+    if (rolesToRemove.length > 0) {
+      // Read existing tuples
+      const readResponse = await client.read({
+        user: formattedUser,
+        object: formattedObject,
+      })
+
+      const existingTuples = readResponse.tuples || []
+      const existingRelations = existingTuples.map((t) => t.key.relation)
+
+      // Only delete roles that actually exist
+      deletes = rolesToRemove
+        .filter((role) => existingRelations.includes(role))
+        .map((role) => ({
+          user: formattedUser,
+          relation: role as FGARelation,
+          object: formattedObject,
+        }))
+    }
 
     if (writes.length > 0 || deletes.length > 0) {
       await client.write({
         writes: writes.length > 0 ? writes : undefined,
         deletes: deletes.length > 0 ? deletes : undefined,
+      })
+
+      // Log operations
+      writes.forEach((w) => {
+        fgaActivityLogger.logWrite(w.user, w.relation, w.object)
+      })
+
+      deletes.forEach((d) => {
+        fgaActivityLogger.logDelete(d.user, d.relation, d.object)
       })
     }
 
@@ -152,19 +180,54 @@ export async function updateUserRoles(
 
 /**
  * Remove all roles for a user in an organization
+ * Only deletes tuples that actually exist
  */
 export async function removeAllUserRoles(
   userId: string,
   organizationId: string
 ): Promise<boolean> {
-  const allRoles: Array<'super_admin' | 'admin' | 'support' | 'member'> = [
-    'super_admin',
-    'admin',
-    'support',
-    'member',
-  ]
+  try {
+    const client = getFGAClient()
+    const formattedUser = formatFGAUser(userId)
+    const formattedObject = formatFGAOrganization(organizationId)
 
-  return updateUserRoles(userId, organizationId, [], allRoles)
+    // Read existing tuples for this user and organization
+    const readResponse = await client.read({
+      user: formattedUser,
+      object: formattedObject,
+    })
+
+    const existingTuples = readResponse.tuples || []
+
+    // If no tuples exist, nothing to delete
+    if (existingTuples.length === 0) {
+      console.log(`No FGA tuples to delete for user ${userId} in org ${organizationId}`)
+      return true
+    }
+
+    // Build delete array from existing tuples only
+    const deletes = existingTuples.map((tuple) => ({
+      user: tuple.key.user,
+      relation: tuple.key.relation as FGARelation,
+      object: tuple.key.object,
+    }))
+
+    // Delete only the tuples that exist
+    await client.write({
+      deletes,
+    })
+
+    // Log each deletion
+    deletes.forEach((tuple) => {
+      fgaActivityLogger.logDelete(tuple.user, tuple.relation, tuple.object)
+    })
+
+    console.log(`Deleted ${deletes.length} FGA tuple(s) for user ${userId}`)
+    return true
+  } catch (error) {
+    console.error('FGA removeAllUserRoles error:', error)
+    return false
+  }
 }
 
 /**

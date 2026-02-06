@@ -1,0 +1,21 @@
+model
+  schema 1.1
+
+type user
+
+type organization
+  relations
+    define super_admin: [user]
+    define admin: [user]
+    define support: [user]
+    define member: [user]
+
+    # Computed permissions based on roles
+    # Note: 'member' role has NO permissions - members are managed, not managers
+    define can_view: super_admin or admin or support
+    define can_reset_mfa: super_admin or admin or support
+    define can_invite: super_admin or admin
+    define can_add_member: super_admin or admin
+    define can_update_roles: super_admin or admin
+    define can_remove_member: super_admin or admin
+    define can_delete: super_admin

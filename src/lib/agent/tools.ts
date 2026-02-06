@@ -1,0 +1,759 @@
+/**
+ * AI Agent Tools - User-scoped operations with FGA checks
+ *
+ * Each tool operates on behalf of the authenticated user, checking their
+ * FGA permissions before executing actions.
+ */
+
+import axios from 'axios'
+import { checkPermission } from '@/lib/fga/checks'
+import { FGAPermission } from '@/types/fga'
+
+export interface AgentContext {
+  userId: string
+  organizationId: string
+  accessToken: string
+  userEmail?: string
+  userName?: string
+}
+
+// Cache for M2M token
+let cachedM2MToken: { token: string; expiresAt: number } | null = null
+
+/**
+ * Get Management API M2M token
+ */
+async function getManagementToken(): Promise<string> {
+  // Return cached token if still valid
+  if (cachedM2MToken && cachedM2MToken.expiresAt > Date.now()) {
+    return cachedM2MToken.token
+  }
+
+  const response = await axios.post(
+    `${process.env.AUTH0_ISSUER_BASE_URL}/oauth/token`,
+    {
+      client_id: process.env.AUTH0_CLIENT_ID,
+      client_secret: process.env.AUTH0_CLIENT_SECRET,
+      audience: process.env.AUTH0_AUDIENCE,
+      grant_type: 'client_credentials',
+    }
+  )
+
+  const { access_token, expires_in } = response.data
+
+  // Cache token with 5 minute buffer
+  cachedM2MToken = {
+    token: access_token,
+    expiresAt: Date.now() + (expires_in - 300) * 1000,
+  }
+
+  return access_token
+}
+
+export interface ToolResult {
+  success: boolean
+  data?: any
+  error?: string
+  requiresCIBA?: boolean
+  cibaOperation?: string
+}
+
+/**
+ * Get information about the current user
+ */
+export async function getMyInfo(
+  context: AgentContext
+): Promise<ToolResult> {
+  try {
+    return {
+      success: true,
+      data: {
+        userId: context.userId,
+        email: context.userEmail,
+        name: context.userName,
+        organizationId: context.organizationId,
+      },
+    }
+  } catch (error: any) {
+    console.error('getMyInfo error:', error)
+    return {
+      success: false,
+      error: 'Failed to get user info',
+    }
+  }
+}
+
+/**
+ * List organization members (requires can_view permission)
+ */
+export async function listMembers(
+  context: AgentContext
+): Promise<ToolResult> {
+  try {
+    // Check FGA permission
+    const hasPermission = await checkPermission(
+      context.userId,
+      context.organizationId,
+      'can_view'
+    )
+
+    if (!hasPermission) {
+      return {
+        success: false,
+        error: 'You do not have permission to view members',
+      }
+    }
+
+    // Get M2M token for Management API
+    const mgmtToken = await getManagementToken()
+
+    // Call Management API using M2M token
+    const response = await axios.get(
+      `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/organizations/${context.organizationId}/members`,
+      {
+        headers: {
+          Authorization: `Bearer ${mgmtToken}`,
+        },
+        params: {
+          per_page: 100,
+        },
+      }
+    )
+
+    return {
+      success: true,
+      data: response.data,
+    }
+  } catch (error: any) {
+    console.error('listMembers error:', error)
+    return {
+      success: false,
+      error: error.response?.data?.message || 'Failed to list members',
+    }
+  }
+}
+
+/**
+ * Invite a new member (requires can_invite permission)
+ */
+export async function inviteMember(
+  context: AgentContext,
+  email: string,
+  roles: string[]
+): Promise<ToolResult> {
+  try {
+    // Check FGA permission
+    const hasPermission = await checkPermission(
+      context.userId,
+      context.organizationId,
+      'can_invite'
+    )
+
+    if (!hasPermission) {
+      return {
+        success: false,
+        error: 'You do not have permission to invite members',
+      }
+    }
+
+    // Get M2M token for Management API
+    const mgmtToken = await getManagementToken()
+
+    // Call Management API
+    const response = await axios.post(
+      `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/organizations/${context.organizationId}/invitations`,
+      {
+        inviter: { name: context.userName || 'AI Assistant' },
+        invitee: { email },
+        client_id: process.env.AUTH0_CLIENT_ID,
+        roles: roles,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${mgmtToken}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    )
+
+    return {
+      success: true,
+      data: response.data,
+    }
+  } catch (error: any) {
+    console.error('inviteMember error:', error)
+    return {
+      success: false,
+      error: error.response?.data?.message || 'Failed to invite member',
+    }
+  }
+}
+
+/**
+ * Add existing user to organization (requires can_add_member permission)
+ */
+export async function addMember(
+  context: AgentContext,
+  userId: string,
+  roles: string[]
+): Promise<ToolResult> {
+  try {
+    // Check FGA permission
+    const hasPermission = await checkPermission(
+      context.userId,
+      context.organizationId,
+      'can_add_member'
+    )
+
+    if (!hasPermission) {
+      return {
+        success: false,
+        error: 'You do not have permission to add members',
+      }
+    }
+
+    // Get M2M token for Management API
+    const mgmtToken = await getManagementToken()
+
+    // Call Management API
+    const response = await axios.post(
+      `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/organizations/${context.organizationId}/members`,
+      {
+        members: [userId],
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${mgmtToken}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    )
+
+    // Assign roles if provided
+    if (roles && roles.length > 0) {
+      await axios.post(
+        `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/organizations/${context.organizationId}/members/${userId}/roles`,
+        {
+          roles: roles,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${mgmtToken}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      )
+    }
+
+    return {
+      success: true,
+      data: response.data,
+    }
+  } catch (error: any) {
+    console.error('addMember error:', error)
+    return {
+      success: false,
+      error: error.response?.data?.message || 'Failed to add member',
+    }
+  }
+}
+
+/**
+ * Update member roles (requires can_update_roles permission + CIBA verification)
+ */
+export async function updateMemberRoles(
+  context: AgentContext,
+  userId: string,
+  roles: string[],
+  cibaVerified: boolean = false
+): Promise<ToolResult> {
+  try {
+    // Check FGA permission
+    const hasPermission = await checkPermission(
+      context.userId,
+      context.organizationId,
+      'can_update_roles'
+    )
+
+    if (!hasPermission) {
+      return {
+        success: false,
+        error: 'You do not have permission to update member roles',
+      }
+    }
+
+    // Require CIBA verification for this sensitive operation
+    if (!cibaVerified) {
+      return {
+        success: false,
+        requiresCIBA: true,
+        cibaOperation: 'update_member_roles',
+        data: { userId, roles },
+      }
+    }
+
+    // Get M2M token for Management API
+    const mgmtToken = await getManagementToken()
+
+    // Update roles via Management API
+    const response = await axios.post(
+      `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/organizations/${context.organizationId}/members/${userId}/roles`,
+      {
+        roles: roles,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${mgmtToken}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    )
+
+    return {
+      success: true,
+      data: response.data,
+    }
+  } catch (error: any) {
+    console.error('updateMemberRoles error:', error)
+    return {
+      success: false,
+      error: error.response?.data?.message || 'Failed to update member roles',
+    }
+  }
+}
+
+/**
+ * Remove member from organization (requires can_remove_member permission + CIBA)
+ */
+export async function removeMember(
+  context: AgentContext,
+  userId: string,
+  cibaVerified: boolean = false
+): Promise<ToolResult> {
+  try {
+    // Check FGA permission
+    const hasPermission = await checkPermission(
+      context.userId,
+      context.organizationId,
+      'can_remove_member'
+    )
+
+    if (!hasPermission) {
+      return {
+        success: false,
+        error: 'You do not have permission to remove members',
+      }
+    }
+
+    // Require CIBA verification
+    if (!cibaVerified) {
+      return {
+        success: false,
+        requiresCIBA: true,
+        cibaOperation: 'remove_member',
+        data: { userId },
+      }
+    }
+
+    // Get M2M token for Management API
+    const mgmtToken = await getManagementToken()
+
+    // Remove member via Management API
+    await axios.delete(
+      `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/organizations/${context.organizationId}/members`,
+      {
+        headers: {
+          Authorization: `Bearer ${mgmtToken}`,
+          'Content-Type': 'application/json',
+        },
+        data: {
+          members: [userId],
+        },
+      }
+    )
+
+    return {
+      success: true,
+      data: { message: 'Member removed successfully' },
+    }
+  } catch (error: any) {
+    console.error('removeMember error:', error)
+    return {
+      success: false,
+      error: error.response?.data?.message || 'Failed to remove member',
+    }
+  }
+}
+
+/**
+ * Delete user completely (requires can_delete permission + CIBA)
+ */
+export async function deleteMember(
+  context: AgentContext,
+  userId: string,
+  cibaVerified: boolean = false
+): Promise<ToolResult> {
+  try {
+    // Check FGA permission
+    const hasPermission = await checkPermission(
+      context.userId,
+      context.organizationId,
+      'can_delete'
+    )
+
+    if (!hasPermission) {
+      return {
+        success: false,
+        error: 'You do not have permission to delete members (requires super_admin)',
+      }
+    }
+
+    // Require CIBA verification
+    if (!cibaVerified) {
+      return {
+        success: false,
+        requiresCIBA: true,
+        cibaOperation: 'delete_member',
+        data: { userId },
+      }
+    }
+
+    // Get M2M token for Management API
+    const mgmtToken = await getManagementToken()
+
+    // Delete user via Management API
+    await axios.delete(
+      `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/users/${userId}`,
+      {
+        headers: {
+          Authorization: `Bearer ${mgmtToken}`,
+        },
+      }
+    )
+
+    return {
+      success: true,
+      data: { message: 'Member deleted successfully' },
+    }
+  } catch (error: any) {
+    console.error('deleteMember error:', error)
+    return {
+      success: false,
+      error: error.response?.data?.message || 'Failed to delete member',
+    }
+  }
+}
+
+/**
+ * Reset member MFA (requires can_reset_mfa permission + CIBA)
+ */
+export async function resetMemberMFA(
+  context: AgentContext,
+  userId: string,
+  cibaVerified: boolean = false
+): Promise<ToolResult> {
+  try {
+    // Check FGA permission
+    const hasPermission = await checkPermission(
+      context.userId,
+      context.organizationId,
+      'can_reset_mfa'
+    )
+
+    if (!hasPermission) {
+      return {
+        success: false,
+        error: 'You do not have permission to reset MFA',
+      }
+    }
+
+    // Require CIBA verification
+    if (!cibaVerified) {
+      return {
+        success: false,
+        requiresCIBA: true,
+        cibaOperation: 'reset_mfa',
+        data: { userId },
+      }
+    }
+
+    // Get M2M token for Management API
+    const mgmtToken = await getManagementToken()
+
+    // Reset MFA via Management API
+    await axios.delete(
+      `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/users/${userId}/multifactor/actions/invalidate`,
+      {
+        headers: {
+          Authorization: `Bearer ${mgmtToken}`,
+        },
+      }
+    )
+
+    return {
+      success: true,
+      data: { message: 'MFA reset successfully' },
+    }
+  } catch (error: any) {
+    console.error('resetMemberMFA error:', error)
+    return {
+      success: false,
+      error: error.response?.data?.message || 'Failed to reset MFA',
+    }
+  }
+}
+
+/**
+ * Check user's permissions (informational)
+ */
+export async function checkUserPermissions(
+  context: AgentContext
+): Promise<ToolResult> {
+  try {
+    const permissions: FGAPermission[] = [
+      'can_view',
+      'can_reset_mfa',
+      'can_invite',
+      'can_add_member',
+      'can_update_roles',
+      'can_remove_member',
+      'can_delete',
+    ]
+
+    const results: Record<string, boolean> = {}
+
+    for (const permission of permissions) {
+      results[permission] = await checkPermission(
+        context.userId,
+        context.organizationId,
+        permission
+      )
+    }
+
+    return {
+      success: true,
+      data: results,
+    }
+  } catch (error: any) {
+    console.error('checkUserPermissions error:', error)
+    return {
+      success: false,
+      error: 'Failed to check permissions',
+    }
+  }
+}
+
+/**
+ * Tool definitions for OpenAI function calling
+ */
+export const agentTools = [
+  {
+    type: 'function',
+    function: {
+      name: 'get_my_info',
+      description:
+        'Get information about the current authenticated user including their user ID, email, name, and organization.',
+      parameters: {
+        type: 'object',
+        properties: {},
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_members',
+      description:
+        'List all members in the organization. Requires can_view permission.',
+      parameters: {
+        type: 'object',
+        properties: {},
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'invite_member',
+      description:
+        'Invite a new member to the organization via email. Requires can_invite permission.',
+      parameters: {
+        type: 'object',
+        properties: {
+          email: {
+            type: 'string',
+            description: 'Email address of the person to invite',
+          },
+          roles: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Array of role IDs to assign to the new member',
+          },
+        },
+        required: ['email'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'add_member',
+      description:
+        'Add an existing Auth0 user to the organization. Requires can_add_member permission.',
+      parameters: {
+        type: 'object',
+        properties: {
+          userId: {
+            type: 'string',
+            description: 'Auth0 user ID (e.g., auth0|123...)',
+          },
+          roles: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Array of role IDs to assign',
+          },
+        },
+        required: ['userId'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'update_member_roles',
+      description:
+        'Update roles for an organization member. Requires can_update_roles permission and CIBA verification.',
+      parameters: {
+        type: 'object',
+        properties: {
+          userId: {
+            type: 'string',
+            description: 'Auth0 user ID of the member',
+          },
+          roles: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'New array of role IDs',
+          },
+        },
+        required: ['userId', 'roles'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'remove_member',
+      description:
+        'Remove a member from the organization. Requires can_remove_member permission and CIBA verification.',
+      parameters: {
+        type: 'object',
+        properties: {
+          userId: {
+            type: 'string',
+            description: 'Auth0 user ID of the member to remove',
+          },
+        },
+        required: ['userId'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_member',
+      description:
+        'Permanently delete a user from Auth0. Requires can_delete permission (super_admin only) and CIBA verification.',
+      parameters: {
+        type: 'object',
+        properties: {
+          userId: {
+            type: 'string',
+            description: 'Auth0 user ID to delete',
+          },
+        },
+        required: ['userId'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'reset_member_mfa',
+      description:
+        'Reset MFA for a member. Requires can_reset_mfa permission and CIBA verification.',
+      parameters: {
+        type: 'object',
+        properties: {
+          userId: {
+            type: 'string',
+            description: 'Auth0 user ID of the member',
+          },
+        },
+        required: ['userId'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'check_my_permissions',
+      description:
+        'Check what permissions the current user has in the organization.',
+      parameters: {
+        type: 'object',
+        properties: {},
+      },
+    },
+  },
+]
+
+/**
+ * Execute a tool function
+ */
+export async function executeTool(
+  toolName: string,
+  args: any,
+  context: AgentContext,
+  cibaVerified: boolean = false
+): Promise<ToolResult> {
+  switch (toolName) {
+    case 'get_my_info':
+      return getMyInfo(context)
+
+    case 'list_members':
+      return listMembers(context)
+
+    case 'invite_member':
+      return inviteMember(context, args.email, args.roles || [])
+
+    case 'add_member':
+      return addMember(context, args.userId, args.roles || [])
+
+    case 'update_member_roles':
+      return updateMemberRoles(
+        context,
+        args.userId,
+        args.roles,
+        cibaVerified
+      )
+
+    case 'remove_member':
+      return removeMember(context, args.userId, cibaVerified)
+
+    case 'delete_member':
+      return deleteMember(context, args.userId, cibaVerified)
+
+    case 'reset_member_mfa':
+      return resetMemberMFA(context, args.userId, cibaVerified)
+
+    case 'check_my_permissions':
+      return checkUserPermissions(context)
+
+    default:
+      return {
+        success: false,
+        error: `Unknown tool: ${toolName}`,
+      }
+  }
+}

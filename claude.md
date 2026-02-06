@@ -313,6 +313,16 @@ npm run lint
   - Write corresponding FGA tuples for each role
 - **Impact**: Member additions now properly sync between Auth0 and FGA authorization
 
+### Complete Auth0 ↔ FGA Synchronization
+- **Fixed**: All member operations now sync FGA tuples correctly
+- **Operations fixed**:
+  - **Add Member**: Creates FGA tuples for assigned roles ✅
+  - **Update Roles**: Reads existing tuples, adds new roles, removes old roles ✅
+  - **Remove Member**: Deletes ALL FGA tuples for user in organization ✅
+- **Smart deletion**: Only deletes tuples that actually exist (prevents FGA validation errors)
+- **Activity logging**: All write/delete operations now appear in FGA Activity Monitor
+- **Result**: Zero orphaned tuples, complete Auth0/FGA consistency
+
 ### MFA Reset Enhancement
 - **Fixed**: MFA reset now uses correct Auth0 Management API endpoints
 - **Updated endpoints**:

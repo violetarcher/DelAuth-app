@@ -1,9 +1,10 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { MemberList } from '../admin/MemberList'
 import { MemberSearch } from '../admin/MemberSearch'
 import { FGAActivityPanel } from '../fga/FGAActivityPanel'
+import { onMemberEvent, MEMBER_EVENTS } from '@/lib/events/memberEvents'
 
 interface AdminPanelProps {
   userId: string
@@ -17,6 +18,16 @@ export function AdminPanel({ userId, organizationId }: AdminPanelProps) {
   const handleRefresh = () => {
     setRefreshTrigger((prev) => prev + 1)
   }
+
+  // Listen for member events from chat operations
+  useEffect(() => {
+    const unsubscribe = onMemberEvent(MEMBER_EVENTS.REFRESH_MEMBERS, () => {
+      console.log('📋 Refreshing member list...')
+      handleRefresh()
+    })
+
+    return unsubscribe
+  }, [])
 
   return (
     <div className="h-full flex flex-col bg-gray-50">

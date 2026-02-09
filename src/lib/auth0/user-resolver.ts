@@ -49,16 +49,20 @@ export function isEmail(identifier: string): boolean {
  * Check if a string is a user ID (auth0|... or other provider formats)
  */
 export function isUserId(identifier: string): boolean {
-  return identifier.includes('|') || identifier.startsWith('auth0')
+  return identifier.includes('|')
 }
 
 /**
- * Resolve email to user ID
+ * Resolve email to user ID using the search API
+ * Using the same method as searchUsersByEmail() in management.ts for consistency
  */
 export async function resolveEmailToUserId(email: string): Promise<string | null> {
   try {
+    console.log(`🔍 Resolving email to user ID: ${email}`)
     const token = await getManagementToken()
 
+    // Use the search API (same as UI/API route - known to work)
+    console.log(`📡 Searching Auth0 users with email: ${email}`)
     const response = await axios.get(
       `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/users`,
       {
@@ -73,19 +77,38 @@ export async function resolveEmailToUserId(email: string): Promise<string | null
     )
 
     const users = response.data
+    console.log(`📊 Found ${users.length} user(s) with email: ${email}`)
+
+    if (users.length > 0) {
+      console.log(`👤 First user match:`, {
+        user_id: users[0].user_id,
+        email: users[0].email,
+        name: users[0].name,
+      })
+    }
 
     if (users.length === 0) {
-      console.warn(`No user found with email: ${email}`)
+      console.warn(`⚠️ No user found with email: ${email}`)
+      console.warn(`💡 Possible reasons:`)
+      console.warn(`   - User doesn't exist in Auth0`)
+      console.warn(`   - User was only invited but hasn't signed up`)
+      console.warn(`   - Email spelling is incorrect`)
       return null
     }
 
     if (users.length > 1) {
-      console.warn(`Multiple users found with email: ${email}, using first one`)
+      console.warn(`⚠️ Multiple users found with email: ${email}, using first one`)
     }
 
-    return users[0].user_id
+    const userId = users[0].user_id
+    console.log(`✅ Resolved ${email} → ${userId}`)
+    return userId
   } catch (error) {
-    console.error('Error resolving email to user ID:', error)
+    console.error('❌ Error resolving email to user ID:', error)
+    if (axios.isAxiosError(error) && error.response) {
+      console.error('Response status:', error.response.status)
+      console.error('Response data:', error.response.data)
+    }
     return null
   }
 }

@@ -231,6 +231,34 @@ export async function removeAllUserRoles(
 }
 
 /**
+ * Get all FGA roles for a user in an organization
+ */
+export async function getUserFGARoles(
+  userId: string,
+  organizationId: string
+): Promise<FGARelation[]> {
+  try {
+    const client = getFGAClient()
+    const formattedUser = formatFGAUser(userId)
+    const formattedObject = formatFGAOrganization(organizationId)
+
+    // Read existing tuples for this user and organization
+    const readResponse = await client.read({
+      user: formattedUser,
+      object: formattedObject,
+    })
+
+    const existingTuples = readResponse.tuples || []
+
+    // Extract just the relation names
+    return existingTuples.map((tuple) => tuple.key.relation as FGARelation)
+  } catch (error) {
+    console.error('FGA getUserFGARoles error:', error)
+    return []
+  }
+}
+
+/**
  * Batch write multiple relationships
  */
 export async function batchWriteRelationships(

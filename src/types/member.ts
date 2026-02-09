@@ -6,7 +6,8 @@ export interface Member {
   name?: string
   email: string
   picture?: string
-  roles: RoleType[]
+  roles: RoleType[] // Auth0 RBAC roles
+  fgaRoles?: RoleType[] // FGA ReBAC roles
   created_at?: string
   last_login?: string
   logins_count?: number

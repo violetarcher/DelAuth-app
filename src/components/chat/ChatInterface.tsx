@@ -5,6 +5,7 @@ import { ChatMessage } from './ChatMessage'
 import { ChatInput } from './ChatInput'
 import { ChatSuggestions } from './ChatSuggestions'
 import toast from 'react-hot-toast'
+import { refreshMemberList } from '@/lib/events/memberEvents'
 
 interface Message {
   role: 'user' | 'assistant' | 'system' | 'tool'
@@ -135,6 +136,31 @@ export function ChatInterface({ organizationId, userId }: ChatInterfaceProps) {
 
       // Clear CIBA request after successful completion
       setCibaRequest(null)
+
+      // Check if operation was successful and should trigger member list refresh
+      const successOperations = [
+        'Successfully added',
+        'added **',
+        'removed from',
+        'Removed',
+        'Roles updated',
+        'deleted from',
+        'Deleted',
+      ]
+
+      const shouldRefresh = successOperations.some((op) =>
+        assistantMessage.includes(op)
+      )
+
+      if (shouldRefresh) {
+        console.log('✅ Operation completed, refreshing member list')
+        // Show toast notification
+        toast.success('Member list updated', { duration: 2000 })
+        // Delay refresh slightly to ensure backend has processed
+        setTimeout(() => {
+          refreshMemberList()
+        }, 500)
+      }
     } catch (error) {
       console.error('Chat error:', error)
       setMessages((prev) => [
@@ -219,6 +245,12 @@ export function ChatInterface({ organizationId, userId }: ChatInterfaceProps) {
     handleSend(suggestion)
   }
 
+  const handleRoleSelect = (roles: string[]) => {
+    // Format roles as comma-separated string and send as user response
+    const rolesString = roles.join(', ')
+    handleSend(rolesString)
+  }
+
   return (
     <div className="h-full flex flex-col">
       {/* Messages */}
@@ -236,7 +268,11 @@ export function ChatInterface({ organizationId, userId }: ChatInterfaceProps) {
         ) : (
           <>
             {messages.map((message, index) => (
-              <ChatMessage key={index} message={message} />
+              <ChatMessage
+                key={index}
+                message={message}
+                onRoleSelect={handleRoleSelect}
+              />
             ))}
             {loading && messages[messages.length - 1]?.role === 'user' && (
               <div className="flex items-center space-x-2 text-gray-500">

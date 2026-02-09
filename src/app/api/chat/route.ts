@@ -34,6 +34,9 @@ export async function POST(request: NextRequest) {
     let accessToken: string
     try {
       const tokenResult = await getAccessToken()
+      if (!tokenResult.accessToken) {
+        throw new Error('Access token is undefined')
+      }
       accessToken = tokenResult.accessToken
     } catch (error) {
       console.error('Failed to get access token:', error)

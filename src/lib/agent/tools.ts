@@ -11,6 +11,92 @@ import { assignRole as writeFGARole, removeAllUserRoles, updateUserRoles } from 
 import { FGAPermission } from '@/types/fga'
 import { normalizeToUserId, isEmail, resolveUserIdentifier } from '@/lib/auth0/user-resolver'
 
+// Cache for organization details
+let cachedOrgDetails: { orgId: string; name: string; displayName: string } | null = null
+
+/**
+ * Available FGA roles (relationships in the authorization model)
+ */
+export const AVAILABLE_ROLES = [
+  'super_admin',
+  'admin',
+  'support',
+  'member',
+] as const
+
+export type FGARole = typeof AVAILABLE_ROLES[number]
+
+/**
+ * Format role name to human-readable form
+ */
+function formatRoleName(role: string): string {
+  const roleMap: Record<string, string> = {
+    'super_admin': 'Super Admin',
+    'admin': 'Admin',
+    'support': 'Support',
+    'member': 'Member',
+  }
+  return roleMap[role] || role
+}
+
+/**
+ * Format role with both human name and ID
+ */
+function formatRoleDisplay(role: string): string {
+  return `**${formatRoleName(role)}** (\`${role}\`)`
+}
+
+/**
+ * Create user-friendly error message when user lookup fails
+ */
+function createUserNotFoundError(userIdentifier: string): string {
+  const isEmail = userIdentifier.includes('@')
+
+  if (isEmail) {
+    return `Could not find any Auth0 user with email **${userIdentifier}**. Please verify:\n\n` +
+           `• The email address is spelled correctly\n` +
+           `• The user exists in Auth0 (not just invited)\n` +
+           `• The user has logged in at least once\n\n` +
+           `You can use the "list members" command to see all current members, or check the Auth0 dashboard.`
+  } else {
+    return `Could not find user with ID **${userIdentifier}**. The user may not exist or may have been deleted.`
+  }
+}
+
+/**
+ * Get organization details
+ */
+async function getOrganizationDetails(organizationId: string): Promise<{ name: string; displayName: string }> {
+  // Return cached if available
+  if (cachedOrgDetails && cachedOrgDetails.orgId === organizationId) {
+    return { name: cachedOrgDetails.name, displayName: cachedOrgDetails.displayName }
+  }
+
+  try {
+    const mgmtToken = await getManagementToken()
+    const response = await axios.get(
+      `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/organizations/${organizationId}`,
+      {
+        headers: {
+          Authorization: `Bearer ${mgmtToken}`,
+        },
+      }
+    )
+
+    const org = response.data
+    cachedOrgDetails = {
+      orgId: organizationId,
+      name: org.name || 'Unknown Organization',
+      displayName: org.display_name || org.name || 'Unknown Organization',
+    }
+
+    return { name: cachedOrgDetails.name, displayName: cachedOrgDetails.displayName }
+  } catch (error) {
+    console.error('Failed to fetch organization details:', error)
+    return { name: 'Unknown Organization', displayName: 'Unknown Organization' }
+  }
+}
+
 export interface AgentContext {
   userId: string
   organizationId: string
@@ -70,6 +156,9 @@ export async function getMyInfo(
     // Get M2M token for Management API
     const mgmtToken = await getManagementToken()
 
+    // Fetch organization details
+    const orgDetails = await getOrganizationDetails(context.organizationId)
+
     // Fetch full user details from Auth0
     const userResponse = await axios.get(
       `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/users/${encodeURIComponent(context.userId)}`,
@@ -93,6 +182,7 @@ export async function getMyInfo(
     )
 
     const roles = rolesResponse.data
+    const formattedRoles = roles.map((r: any) => formatRoleDisplay(r.name))
 
     return {
       success: true,
@@ -104,8 +194,10 @@ export async function getMyInfo(
         nickname: user.nickname,
         givenName: user.given_name,
         familyName: user.family_name,
+        organizationName: orgDetails.displayName,
         organizationId: context.organizationId,
         roles: roles.map((r: any) => r.name),
+        formattedRoles: formattedRoles,
         lastLogin: user.last_login,
         loginsCount: user.logins_count,
         createdAt: user.created_at,
@@ -147,12 +239,15 @@ export async function getMemberInfo(
     if (!userId) {
       return {
         success: false,
-        error: `Could not find user with identifier: ${userIdentifier}`,
+        error: createUserNotFoundError(userIdentifier),
       }
     }
 
     // Get M2M token for Management API
     const mgmtToken = await getManagementToken()
+
+    // Fetch organization details
+    const orgDetails = await getOrganizationDetails(context.organizationId)
 
     // Fetch full user details from Auth0
     const userResponse = await axios.get(
@@ -177,6 +272,7 @@ export async function getMemberInfo(
     )
 
     const roles = rolesResponse.data
+    const formattedRoles = roles.map((r: any) => formatRoleDisplay(r.name))
 
     return {
       success: true,
@@ -188,8 +284,10 @@ export async function getMemberInfo(
         nickname: user.nickname,
         givenName: user.given_name,
         familyName: user.family_name,
+        organizationName: orgDetails.displayName,
         organizationId: context.organizationId,
         roles: roles.map((r: any) => r.name),
+        formattedRoles: formattedRoles,
         lastLogin: user.last_login,
         loginsCount: user.logins_count,
         createdAt: user.created_at,
@@ -200,6 +298,64 @@ export async function getMemberInfo(
     return {
       success: false,
       error: error.response?.data?.message || 'Failed to get member info',
+    }
+  }
+}
+
+/**
+ * List available FGA roles
+ */
+export async function listAvailableRoles(
+  context: AgentContext
+): Promise<ToolResult> {
+  try {
+    // Get org details for response
+    const orgDetails = await getOrganizationDetails(context.organizationId)
+
+    const roleDescriptions = [
+      {
+        role: 'super_admin',
+        name: 'Super Admin',
+        description: 'Full control - all operations including delete',
+        permissions: ['can_view', 'can_reset_mfa', 'can_invite', 'can_add_member', 'can_update_roles', 'can_remove_member', 'can_delete'],
+      },
+      {
+        role: 'admin',
+        name: 'Admin',
+        description: 'All operations except delete',
+        permissions: ['can_view', 'can_reset_mfa', 'can_invite', 'can_add_member', 'can_update_roles', 'can_remove_member'],
+      },
+      {
+        role: 'support',
+        name: 'Support',
+        description: 'View members and reset MFA only',
+        permissions: ['can_view', 'can_reset_mfa'],
+      },
+      {
+        role: 'member',
+        name: 'Member',
+        description: 'Regular user with no admin permissions (users being managed)',
+        permissions: [],
+      },
+    ]
+
+    return {
+      success: true,
+      data: {
+        organizationName: orgDetails.displayName,
+        organizationId: context.organizationId,
+        roles: roleDescriptions,
+        message: `**Available Roles in ${orgDetails.displayName}:**\n\n` +
+          roleDescriptions.map(r =>
+            `• **${r.name}** (\`${r.role}\`): ${r.description}\n  Permissions: ${r.permissions.length > 0 ? r.permissions.join(', ') : 'None'}`
+          ).join('\n\n'),
+      },
+    }
+  } catch (error: any) {
+    console.error('listAvailableRoles error:', error)
+    return {
+      success: false,
+      error: 'Failed to list available roles',
     }
   }
 }
@@ -228,6 +384,9 @@ export async function listMembers(
     // Get M2M token for Management API
     const mgmtToken = await getManagementToken()
 
+    // Fetch organization details
+    const orgDetails = await getOrganizationDetails(context.organizationId)
+
     // Call Management API using M2M token
     const response = await axios.get(
       `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/organizations/${context.organizationId}/members`,
@@ -241,9 +400,22 @@ export async function listMembers(
       }
     )
 
+    // Enhance member data with formatted display
+    const members = response.data
+    const enhancedMembers = members.map((member: any) => ({
+      ...member,
+      displayName: member.name || member.email,
+      userIdShort: member.user_id.substring(0, 20) + '...',
+    }))
+
     return {
       success: true,
-      data: response.data,
+      data: {
+        organizationName: orgDetails.displayName,
+        organizationId: context.organizationId,
+        members: enhancedMembers,
+        totalCount: enhancedMembers.length,
+      },
     }
   } catch (error: any) {
     console.error('listMembers error:', error)
@@ -280,14 +452,26 @@ export async function inviteMember(
     // Get M2M token for Management API
     const mgmtToken = await getManagementToken()
 
-    // Call Management API
+    // Get org details for response
+    const orgDetails = await getOrganizationDetails(context.organizationId)
+
+    // Validate role names (only FGA roles allowed)
+    const validRoles = roles.filter(role => AVAILABLE_ROLES.includes(role as FGARole))
+    if (validRoles.length !== roles.length) {
+      const invalidRoles = roles.filter(role => !AVAILABLE_ROLES.includes(role as FGARole))
+      return {
+        success: false,
+        error: `Invalid role(s): ${invalidRoles.join(', ')}. Valid roles are: ${AVAILABLE_ROLES.join(', ')}`,
+      }
+    }
+
+    // Send invitation via Auth0 (no role assignment in Auth0, just invitation)
     const response = await axios.post(
       `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/organizations/${context.organizationId}/invitations`,
       {
         inviter: { name: context.userName || 'AI Assistant' },
         invitee: { email },
         client_id: process.env.AUTH0_CLIENT_ID,
-        roles: roles,
       },
       {
         headers: {
@@ -297,9 +481,22 @@ export async function inviteMember(
       }
     )
 
+    // Note: FGA tuples will be written when the user accepts the invitation and is added to the organization
+
+    // Format roles for response
+    const formattedRoles = roles.length > 0 ? roles.map(formatRoleDisplay) : ['No roles assigned']
+
     return {
       success: true,
-      data: response.data,
+      data: {
+        ...response.data,
+        email: email,
+        organizationName: orgDetails.displayName,
+        organizationId: context.organizationId,
+        roles: roles,
+        formattedRoles: formattedRoles,
+        message: `✅ Invitation sent to **${email}** for **${orgDetails.displayName}** with role(s): ${formattedRoles.join(', ')}`,
+      },
     }
   } catch (error: any) {
     console.error('inviteMember error:', error)
@@ -339,17 +536,27 @@ export async function addMember(
     if (!userId) {
       return {
         success: false,
-        error: `Could not find user with identifier: ${userIdentifier}`,
+        error: createUserNotFoundError(userIdentifier),
       }
     }
 
     // Get user details for response
     const userInfo = await resolveUserIdentifier(userIdentifier)
 
+    // Validate role names (only FGA roles allowed)
+    const validRoles = roles.filter(role => AVAILABLE_ROLES.includes(role as FGARole))
+    if (validRoles.length !== roles.length) {
+      const invalidRoles = roles.filter(role => !AVAILABLE_ROLES.includes(role as FGARole))
+      return {
+        success: false,
+        error: `Invalid role(s): ${invalidRoles.join(', ')}. Valid roles are: ${AVAILABLE_ROLES.join(', ')}`,
+      }
+    }
+
     // Get M2M token for Management API
     const mgmtToken = await getManagementToken()
 
-    // Call Management API
+    // Add user to Auth0 organization (membership only, no Auth0 roles)
     const response = await axios.post(
       `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/organizations/${context.organizationId}/members`,
       {
@@ -363,75 +570,30 @@ export async function addMember(
       }
     )
 
-    // Assign roles if provided
+    // Write FGA tuples for each role
     if (roles && roles.length > 0) {
-      // Process each role - handle both role IDs and role names
       for (const role of roles) {
-        let roleId: string
-        let roleName: 'super_admin' | 'admin' | 'support' | 'member'
-
-        // Check if this looks like a role ID (starts with 'rol_') or a role name
-        if (role.startsWith('rol_')) {
-          // It's an Auth0 role ID - fetch the name
-          const roleResponse = await axios.get(
-            `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/roles/${role}`,
-            {
-              headers: {
-                Authorization: `Bearer ${mgmtToken}`,
-              },
-            }
-          )
-          roleId = role
-          roleName = roleResponse.data.name as 'super_admin' | 'admin' | 'support' | 'member'
-        } else {
-          // It's a role name - need to find the role ID
-          const rolesResponse = await axios.get(
-            `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/roles`,
-            {
-              headers: {
-                Authorization: `Bearer ${mgmtToken}`,
-              },
-              params: {
-                name_filter: role,
-              },
-            }
-          )
-
-          const matchingRole = rolesResponse.data.roles?.find((r: any) => r.name === role)
-          if (!matchingRole) {
-            console.warn(`Role not found: ${role}`)
-            continue
-          }
-
-          roleId = matchingRole.id
-          roleName = role as 'super_admin' | 'admin' | 'support' | 'member'
-        }
-
-        // Assign role in Auth0 organization
-        await axios.post(
-          `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/organizations/${context.organizationId}/members/${userId}/roles`,
-          {
-            roles: [roleId],
-          },
-          {
-            headers: {
-              Authorization: `Bearer ${mgmtToken}`,
-              'Content-Type': 'application/json',
-            },
-          }
-        )
-
-        // Write FGA tuple
-        await writeFGARole(userId, context.organizationId, roleName)
+        await writeFGARole(userId, context.organizationId, role as FGARole)
       }
     }
+
+    // Get org details for response
+    const orgDetails = await getOrganizationDetails(context.organizationId)
+
+    // Format roles for response
+    const formattedRoles = roles.map(formatRoleDisplay)
 
     return {
       success: true,
       data: {
         ...response.data,
+        userName: userInfo?.name || userInfo?.email,
         userEmail: userInfo?.email,
         userId: userId,
+        organizationName: orgDetails.displayName,
+        organizationId: context.organizationId,
+        formattedRoles: formattedRoles,
+        message: `✅ Successfully added **${userInfo?.name || userInfo?.email}** to **${orgDetails.displayName}** with role(s): ${formattedRoles.join(', ')}`,
       },
     }
   } catch (error: any) {
@@ -459,7 +621,7 @@ export async function updateMemberRoles(
     if (!userId) {
       return {
         success: false,
-        error: `Could not find user with identifier: ${userIdentifier}`,
+        error: createUserNotFoundError(userIdentifier),
       }
     }
 
@@ -494,112 +656,43 @@ export async function updateMemberRoles(
       }
     }
 
-    // Get M2M token for Management API
-    const mgmtToken = await getManagementToken()
-
-    // Get current roles from Auth0
-    const currentRolesResponse = await axios.get(
-      `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/organizations/${context.organizationId}/members/${userId}/roles`,
-      {
-        headers: {
-          Authorization: `Bearer ${mgmtToken}`,
-        },
+    // Validate role names (only FGA roles allowed)
+    const validRoles = roles.filter(role => AVAILABLE_ROLES.includes(role as FGARole))
+    if (validRoles.length !== roles.length) {
+      const invalidRoles = roles.filter(role => !AVAILABLE_ROLES.includes(role as FGARole))
+      return {
+        success: false,
+        error: `Invalid role(s): ${invalidRoles.join(', ')}. Valid roles are: ${AVAILABLE_ROLES.join(', ')}`,
       }
+    }
+
+    const roleNames = validRoles as FGARole[]
+
+    // Update FGA tuples - this replaces all existing roles with the new set
+    await updateUserRoles(
+      userId,
+      context.organizationId,
+      roleNames,
+      [] // updateUserRoles will figure out what to remove
     )
-    const currentRoles = currentRolesResponse.data || []
-    const currentRoleNames = currentRoles.map((r: any) => r.name)
 
-    // Process new roles and map to Auth0 role IDs
-    const roleIds: string[] = []
-    const roleNames: Array<'super_admin' | 'admin' | 'support' | 'member'> = []
+    // Get org details for response
+    const orgDetails = await getOrganizationDetails(context.organizationId)
 
-    for (const role of roles) {
-      // Check if it's a role ID or role name
-      if (role.startsWith('rol_')) {
-        // It's already an Auth0 role ID
-        const roleResponse = await axios.get(
-          `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/roles/${role}`,
-          {
-            headers: {
-              Authorization: `Bearer ${mgmtToken}`,
-            },
-          }
-        )
-        roleIds.push(role)
-        roleNames.push(roleResponse.data.name as any)
-      } else {
-        // It's a role name - need to find the role ID
-        const rolesResponse = await axios.get(
-          `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/roles`,
-          {
-            headers: {
-              Authorization: `Bearer ${mgmtToken}`,
-            },
-            params: {
-              name_filter: role,
-            },
-          }
-        )
-        const matchingRole = rolesResponse.data.roles?.find((r: any) => r.name === role)
-        if (matchingRole) {
-          roleIds.push(matchingRole.id)
-          roleNames.push(role as any)
-        }
-      }
-    }
-
-    // Calculate roles to add and remove in Auth0
-    const rolesToAdd = roleIds.filter((_, index) => !currentRoleNames.includes(roleNames[index]))
-    const currentRoleIds = currentRoles.map((r: any) => r.id)
-    const rolesToRemove = currentRoleIds.filter((id: string) => !roleIds.includes(id))
-
-    // Update roles in Auth0
-    if (rolesToRemove.length > 0) {
-      await axios.delete(
-        `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/organizations/${context.organizationId}/members/${userId}/roles`,
-        {
-          headers: {
-            Authorization: `Bearer ${mgmtToken}`,
-            'Content-Type': 'application/json',
-          },
-          data: {
-            roles: rolesToRemove,
-          },
-        }
-      )
-    }
-
-    if (rolesToAdd.length > 0) {
-      await axios.post(
-        `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/organizations/${context.organizationId}/members/${userId}/roles`,
-        {
-          roles: rolesToAdd,
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${mgmtToken}`,
-            'Content-Type': 'application/json',
-          },
-        }
-      )
-    }
-
-    // IMPORTANT: Also sync FGA tuples
-    const fgaRolesToAdd = roleNames.filter(name => !currentRoleNames.includes(name)) as Array<'super_admin' | 'admin' | 'support' | 'member'>
-    const fgaRolesToRemove = currentRoleNames.filter((name: string) => !roleNames.includes(name)) as Array<'super_admin' | 'admin' | 'support' | 'member'>
-
-    if (fgaRolesToAdd.length > 0 || fgaRolesToRemove.length > 0) {
-      await updateUserRoles(userId, context.organizationId, fgaRolesToAdd, fgaRolesToRemove)
-    }
+    // Format roles for display
+    const formattedNewRoles = roleNames.map(formatRoleDisplay)
 
     return {
       success: true,
       data: {
-        message: `Roles updated for ${userInfo?.email || userId} (Auth0 + FGA synced)`,
+        userName: userInfo?.name || userInfo?.email,
         userEmail: userInfo?.email,
         userId: userId,
-        rolesAdded: fgaRolesToAdd,
-        rolesRemoved: fgaRolesToRemove,
+        organizationName: orgDetails.displayName,
+        organizationId: context.organizationId,
+        newRoles: roleNames,
+        formattedNewRoles: formattedNewRoles,
+        message: `✅ Roles updated for **${userInfo?.name || userInfo?.email}** in **${orgDetails.displayName}**. New roles: ${formattedNewRoles.join(', ')}`,
       },
     }
   } catch (error: any) {
@@ -626,7 +719,7 @@ export async function removeMember(
     if (!userId) {
       return {
         success: false,
-        error: `Could not find user with identifier: ${userIdentifier}`,
+        error: createUserNotFoundError(userIdentifier),
       }
     }
 
@@ -681,12 +774,18 @@ export async function removeMember(
     // IMPORTANT: Also delete ALL FGA tuples for this user in this organization
     await removeAllUserRoles(userId, context.organizationId)
 
+    // Get org details for response
+    const orgDetails = await getOrganizationDetails(context.organizationId)
+
     return {
       success: true,
       data: {
-        message: `Member ${userInfo?.email || userId} removed successfully (Auth0 + FGA tuples deleted)`,
+        userName: userInfo?.name || userInfo?.email,
         userEmail: userInfo?.email,
         userId: userId,
+        organizationName: orgDetails.displayName,
+        organizationId: context.organizationId,
+        message: `✅ **${userInfo?.name || userInfo?.email}** removed from **${orgDetails.displayName}** (Auth0 + FGA tuples deleted)`,
       },
     }
   } catch (error: any) {
@@ -713,7 +812,7 @@ export async function deleteMember(
     if (!userId) {
       return {
         success: false,
-        error: `Could not find user with identifier: ${userIdentifier}`,
+        error: createUserNotFoundError(userIdentifier),
       }
     }
 
@@ -760,12 +859,23 @@ export async function deleteMember(
       }
     )
 
+    // IMPORTANT: Clean up ALL FGA tuples for this user across ALL organizations
+    // Note: When a user is deleted from Auth0 entirely, we should remove their FGA tuples
+    // in the current organization context. If they're in multiple orgs, those orgs should
+    // handle cleanup separately.
+    await removeAllUserRoles(userId, context.organizationId)
+
+    // Get org details for response
+    const orgDetails = await getOrganizationDetails(context.organizationId)
+
     return {
       success: true,
       data: {
-        message: `User ${userInfo?.email || userId} deleted permanently`,
+        userName: userInfo?.name || userInfo?.email,
         userEmail: userInfo?.email,
         userId: userId,
+        organizationName: orgDetails.displayName,
+        message: `✅ User **${userInfo?.name || userInfo?.email}** (\`${userId}\`) deleted permanently from Auth0`,
       },
     }
   } catch (error: any) {
@@ -792,7 +902,7 @@ export async function resetMemberMFA(
     if (!userId) {
       return {
         success: false,
-        error: `Could not find user with identifier: ${userIdentifier}`,
+        error: createUserNotFoundError(userIdentifier),
       }
     }
 
@@ -876,14 +986,19 @@ export async function resetMemberMFA(
       }
     }
 
+    // Get org details for response
+    const orgDetails = await getOrganizationDetails(context.organizationId)
+
     return {
       success: true,
       data: {
-        message: `MFA reset successful for ${userInfo?.email || userId}. Removed ${deletedCount} of ${authMethods.length} authentication method(s).`,
+        userName: userInfo?.name || userInfo?.email,
         userEmail: userInfo?.email,
         userId: userId,
+        organizationName: orgDetails.displayName,
         methodsDeleted: deletedCount,
         totalMethods: authMethods.length,
+        message: `✅ MFA reset successful for **${userInfo?.name || userInfo?.email}** in **${orgDetails.displayName}**. Removed ${deletedCount} of ${authMethods.length} authentication method(s).`,
       },
     }
   } catch (error: any) {
@@ -911,6 +1026,9 @@ export async function checkUserPermissions(
   context: AgentContext
 ): Promise<ToolResult> {
   try {
+    // Get org details for response
+    const orgDetails = await getOrganizationDetails(context.organizationId)
+
     const permissions: FGAPermission[] = [
       'can_view',
       'can_reset_mfa',
@@ -931,9 +1049,25 @@ export async function checkUserPermissions(
       )
     }
 
+    // Format permission names for display
+    const permissionLabels: Record<string, string> = {
+      'can_view': 'View Members',
+      'can_reset_mfa': 'Reset MFA',
+      'can_invite': 'Invite Members',
+      'can_add_member': 'Add Members',
+      'can_update_roles': 'Update Roles',
+      'can_remove_member': 'Remove Members',
+      'can_delete': 'Delete Users',
+    }
+
     return {
       success: true,
-      data: results,
+      data: {
+        organizationName: orgDetails.displayName,
+        organizationId: context.organizationId,
+        permissions: results,
+        permissionLabels: permissionLabels,
+      },
     }
   } catch (error: any) {
     console.error('checkUserPermissions error:', error)
@@ -965,13 +1099,13 @@ export const agentTools = [
     function: {
       name: 'get_member_info',
       description:
-        'Get comprehensive profile information about a specific organization member. Returns the same detailed information as get_my_info but for any member: name, email (with verification status), user ID, nickname, roles in organization, login statistics, and account creation date. Use this when user asks about another member like "tell me about member1@atko.email", "who is john@example.com", "show me info for user auth0|123", etc. Format the response as a clean profile card with sections. Requires can_view permission.',
+        'Get comprehensive profile information about a specific organization member. Returns the same detailed information as get_my_info but for any member: name, email (with verification status), user ID, nickname, roles in organization, login statistics, and account creation date. Use this when user asks about another member like "tell me about member1@atko.email", "who is john@example.com", "show me info for user auth0|123", etc. Format the response as a clean profile card with sections. Requires can_view permission. ACCEPTS EMAIL OR USER ID.',
       parameters: {
         type: 'object',
         properties: {
           userId: {
             type: 'string',
-            description: 'User email address (e.g., member1@atko.email) or Auth0 user ID (e.g., auth0|123...)',
+            description: 'User identifier - can be EITHER an email address (e.g., john@example.com, auth0archer@gmail.com) OR an Auth0 user ID (e.g., auth0|123...). Email addresses are automatically resolved to user IDs.',
           },
         },
         required: ['userId'],
@@ -995,7 +1129,7 @@ export const agentTools = [
     function: {
       name: 'invite_member',
       description:
-        'Invite a new member to the organization via email. Requires can_invite permission.',
+        'INVITE a NEW user by email (for users who don\'t have an Auth0 account yet). Sends an email invitation. Requires can_invite permission. For EXISTING users, use add_member instead.',
       parameters: {
         type: 'object',
         properties: {
@@ -1006,7 +1140,7 @@ export const agentTools = [
           roles: {
             type: 'array',
             items: { type: 'string' },
-            description: 'Array of role IDs to assign to the new member',
+            description: 'Array of FGA role names (e.g., ["admin", "support"]). Valid roles: super_admin, admin, support, member. These are FGA relationship names, NOT Auth0 role IDs.',
           },
         },
         required: ['email'],
@@ -1018,18 +1152,18 @@ export const agentTools = [
     function: {
       name: 'add_member',
       description:
-        'Add an existing Auth0 user to the organization. Accepts either email address or user ID. Requires can_add_member permission. This will add the member to both Auth0 organization and FGA.',
+        'ADD an EXISTING Auth0 user to the organization (for users who already have an account). ACCEPTS EMAIL OR USER ID. Requires can_add_member permission. Adds member to Auth0 org and writes FGA tuples. For NEW users, use invite_member instead.',
       parameters: {
         type: 'object',
         properties: {
           userId: {
             type: 'string',
-            description: 'User email address (e.g., user@example.com) or Auth0 user ID (e.g., auth0|123...)',
+            description: 'User identifier - can be EITHER an email address (e.g., john@example.com, auth0archer@gmail.com) OR an Auth0 user ID (e.g., auth0|123...). Email addresses are automatically resolved.',
           },
           roles: {
             type: 'array',
             items: { type: 'string' },
-            description: 'Array of role names to assign (e.g., "admin", "support", "member")',
+            description: 'Array of FGA role names (e.g., ["admin", "support"]). Valid roles: super_admin, admin, support, member. These are FGA relationship names, NOT Auth0 role IDs.',
           },
         },
         required: ['userId'],
@@ -1041,18 +1175,18 @@ export const agentTools = [
     function: {
       name: 'update_member_roles',
       description:
-        'Update roles for an organization member. Accepts either email address or user ID. Requires can_update_roles permission and CIBA verification.',
+        'Update FGA roles for an organization member. ACCEPTS EMAIL OR USER ID. Requires can_update_roles permission and CIBA verification (automatic).',
       parameters: {
         type: 'object',
         properties: {
           userId: {
             type: 'string',
-            description: 'User email address (e.g., user@example.com) or Auth0 user ID (e.g., auth0|123...)',
+            description: 'User identifier - can be EITHER an email address (e.g., john@example.com, auth0archer@gmail.com) OR an Auth0 user ID (e.g., auth0|123...). Email addresses are automatically resolved.',
           },
           roles: {
             type: 'array',
             items: { type: 'string' },
-            description: 'New array of role names (e.g., ["admin", "support"]) - these will be synced to both Auth0 and FGA',
+            description: 'Complete new array of FGA role names (e.g., ["admin", "support"]) - these REPLACE existing roles. Valid roles: super_admin, admin, support, member. These are FGA relationship names.',
           },
         },
         required: ['userId', 'roles'],
@@ -1064,13 +1198,13 @@ export const agentTools = [
     function: {
       name: 'remove_member',
       description:
-        'Remove a member from the organization. Accepts either email address or user ID. Requires can_remove_member permission and CIBA verification.',
+        'Remove a member from the organization. ACCEPTS EMAIL OR USER ID. Requires can_remove_member permission and CIBA verification (automatic).',
       parameters: {
         type: 'object',
         properties: {
           userId: {
             type: 'string',
-            description: 'User email address (e.g., user@example.com) or Auth0 user ID (e.g., auth0|123...) of the member to remove',
+            description: 'User identifier - can be EITHER an email address (e.g., auth0archer@gmail.com, john@example.com) OR an Auth0 user ID (e.g., auth0|123...). Email addresses are automatically resolved.',
           },
         },
         required: ['userId'],
@@ -1082,13 +1216,13 @@ export const agentTools = [
     function: {
       name: 'delete_member',
       description:
-        'Permanently delete a user from Auth0. Accepts either email address or user ID. Requires can_delete permission (super_admin only) and CIBA verification.',
+        'Permanently delete a user from Auth0 completely. ACCEPTS EMAIL OR USER ID. Requires can_delete permission (super_admin only) and CIBA verification (automatic).',
       parameters: {
         type: 'object',
         properties: {
           userId: {
             type: 'string',
-            description: 'User email address (e.g., user@example.com) or Auth0 user ID (e.g., auth0|123...) to delete',
+            description: 'User identifier - can be EITHER an email address (e.g., auth0archer@gmail.com, john@example.com) OR an Auth0 user ID (e.g., auth0|123...). Email addresses are automatically resolved.',
           },
         },
         required: ['userId'],
@@ -1100,16 +1234,28 @@ export const agentTools = [
     function: {
       name: 'reset_member_mfa',
       description:
-        'Reset MFA for a member. Accepts either email address or user ID. Requires can_reset_mfa permission and CIBA verification.',
+        'Reset all MFA enrollments for a member. ACCEPTS EMAIL OR USER ID. Requires can_reset_mfa permission and CIBA verification (automatic).',
       parameters: {
         type: 'object',
         properties: {
           userId: {
             type: 'string',
-            description: 'User email address (e.g., user@example.com) or Auth0 user ID (e.g., auth0|123...) of the member',
+            description: 'User identifier - can be EITHER an email address (e.g., auth0archer@gmail.com, john@example.com) OR an Auth0 user ID (e.g., auth0|123...). Email addresses are automatically resolved.',
           },
         },
         required: ['userId'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_available_roles',
+      description:
+        'List all available FGA roles in the organization with their descriptions and permissions. Use this when user asks "what roles exist", "show me roles", "what are the available roles", etc.',
+      parameters: {
+        type: 'object',
+        properties: {},
       },
     },
   },
@@ -1145,6 +1291,9 @@ export async function executeTool(
 
     case 'list_members':
       return listMembers(context)
+
+    case 'list_available_roles':
+      return listAvailableRoles(context)
 
     case 'invite_member':
       return inviteMember(context, args.email, args.roles || [])

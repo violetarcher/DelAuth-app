@@ -55,30 +55,64 @@ export function MemberCard({ member, organizationId, onUpdate }: MemberCardProps
                 <h3 className="text-sm font-semibold text-gray-900 truncate">
                   {member.name || 'No name'}
                 </h3>
-                {/* Roles - Inline */}
-                {member.roles && member.roles.length > 0 ? (
-                  member.roles.map((role) => (
-                    <Badge
-                      key={role}
-                      variant={getRoleBadgeVariant(role)}
-                      size="sm"
-                    >
-                      {role.replace('_', ' ')}
-                    </Badge>
-                  ))
-                ) : (
-                  <Badge variant="secondary" size="sm">
-                    No roles
-                  </Badge>
-                )}
               </div>
 
               <p className="text-xs text-gray-500 truncate mt-0.5">{member.email}</p>
 
               {/* User ID - Compact */}
-              <p className="text-xs text-gray-400 truncate font-mono">
+              <p className="text-xs text-gray-400 truncate font-mono mb-1">
                 {member.user_id}
               </p>
+
+              {/* Auth0 RBAC Roles */}
+              {member.roles && member.roles.length > 0 && (
+                <div className="flex items-center gap-1.5 mb-1">
+                  <span className="text-xs font-medium text-blue-700 flex-shrink-0">
+                    Auth0:
+                  </span>
+                  <div className="flex flex-wrap gap-1">
+                    {member.roles.map((role) => (
+                      <Badge
+                        key={`auth0-${role}`}
+                        variant={getRoleBadgeVariant(role)}
+                        size="sm"
+                        className="border-2 border-solid"
+                      >
+                        {role.replace('_', ' ')}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* FGA ReBAC Roles */}
+              {member.fgaRoles && member.fgaRoles.length > 0 && (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs font-medium text-purple-700 flex-shrink-0">
+                    FGA:
+                  </span>
+                  <div className="flex flex-wrap gap-1">
+                    {member.fgaRoles.map((role) => (
+                      <Badge
+                        key={`fga-${role}`}
+                        variant={getRoleBadgeVariant(role)}
+                        size="sm"
+                        className="border-2 border-dashed"
+                      >
+                        {role.replace('_', ' ')}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* No Roles Message */}
+              {(!member.roles || member.roles.length === 0) &&
+               (!member.fgaRoles || member.fgaRoles.length === 0) && (
+                <Badge variant="secondary" size="sm">
+                  No roles
+                </Badge>
+              )}
             </div>
           </div>
 

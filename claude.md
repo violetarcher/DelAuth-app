@@ -301,7 +301,139 @@ npm run lint
 
 ---
 
-## Recent Updates (February 6, 2026)
+## Recent Updates
+
+### Natural Language Input Support (February 9, 2026)
+
+**Chatbot now accepts emails, names, and natural language for all operations**
+
+#### What Changed
+All chatbot operations now support natural, human-friendly inputs:
+- ✅ "Remove auth0archer@gmail.com" - works directly with email
+- ✅ "Reset MFA for john@example.com" - accepts email instead of user ID
+- ✅ "Update Jane's roles" - can use names (agent looks up email/ID)
+- ✅ "Add existing member john@example.com with admin role" - role names instead of IDs
+
+#### Implementation
+1. **Enhanced System Prompt** (`src/lib/openai/client.ts:30-36`):
+   - Clear instructions on accepting emails, user IDs, and names
+   - Examples showing natural language patterns
+   - Guidance on when to look up user details
+
+2. **Updated All Tool Descriptions** (`src/lib/agent/tools.ts:1123-1275`):
+   - Every tool clearly states "ACCEPTS EMAIL OR USER ID"
+   - Parameter descriptions emphasize email support
+   - Role parameters specify "role NAMES" not "role IDs"
+
+3. **Role Name Mapping in inviteMember** (`src/lib/agent/tools.ts:371-398`):
+   - Now maps role names to Auth0 role IDs
+   - Handles: super_admin, admin, support, member
+   - Consistent with addMember and updateMemberRoles
+
+#### Example Commands
+```
+User: "Remove auth0archer@gmail.com"
+Agent: [Calls remove_member with email directly]
+
+User: "Reset MFA for john@example.com"
+Agent: [Calls reset_member_mfa with email directly]
+
+User: "Invite sarah@example.com as admin"
+Agent: [Calls invite_member with email and "admin" role name]
+
+User: "Update Jane's roles to admin and support"
+Agent: [Calls list_members to find Jane, then update_member_roles]
+```
+
+#### Key Improvements
+- **Zero friction**: Users don't need to know technical IDs
+- **Natural commands**: Works with how people actually talk
+- **Consistent**: All operations accept the same input formats
+- **Smart resolution**: Automatically resolves emails to user IDs behind the scenes
+- **Silent operation**: Agent never mentions "looking up" or "finding" - it just works
+
+#### Agent Behavior
+The agent now understands to:
+1. Accept emails directly from users (any string with "@")
+2. Pass email to tool immediately without explanation
+3. Let backend silently resolve email → user ID
+4. Report only the final result to the user
+
+**User sees:**
+```
+User: "remove user auth0archer@gmail.com"
+Agent: [Guardian Push verification]
+Agent: "✅ User removed from organization"
+```
+
+**User does NOT see:**
+```
+❌ "Let me look up that user..."
+❌ "Finding the user ID..."
+❌ "Searching for the user..."
+```
+
+---
+
+### Human-Readable Agent Responses (February 9, 2026)
+
+**Enhanced chatbot with human-readable formatting for all responses**
+
+#### What Changed
+- **Organization Names**: Responses now show "**VibeC0derzz** (\`org_0EgXDHCsaAtl5uhG\`)" instead of just the ID
+- **User Names**: Display "**John Doe** (\`auth0|123456789\`)" instead of raw IDs
+- **Role Names**: Show "**Admin** (\`admin\`)" with proper formatting
+- **Operation Feedback**: Clear messages like "✅ Updated roles for **Jane Smith** in **VibeC0derzz**"
+
+#### Implementation
+1. **Helper Functions** (`src/lib/agent/tools.ts:17-69`):
+   - `formatRoleName()` - Converts role IDs to human names (super_admin → Super Admin)
+   - `formatRoleDisplay()` - Returns formatted role with both name and ID
+   - `getOrganizationDetails()` - Fetches and caches org display names
+
+2. **Enhanced Tool Responses**:
+   - All tools now return `organizationName`, `userName`, `formattedRoles` fields
+   - Success messages include human-readable formatting
+   - Lists include both display names and technical IDs
+
+3. **Updated System Prompt** (`src/lib/openai/client.ts:30-52`):
+   - Clear formatting rules for organizations, users, roles
+   - Instructions to always use formatted fields from tool responses
+   - Examples showing proper display format
+
+#### Example Responses
+
+**Before**:
+```
+You belong to the organization with ID: org_0EgXDHCsaAtl5uhG
+```
+
+**After**:
+```
+You belong to organization **VibeC0derzz** (`org_0EgXDHCsaAtl5uhG`)
+```
+
+**Profile Display**:
+```
+👤 **John Doe**
+✉️ john@example.com ✓
+User ID: `auth0|123456789`
+Organization: **VibeC0derzz** (`org_0EgXDHCsaAtl5uhG`)
+
+Organization Roles from FGA:
+• **Admin** (`admin`)
+• **Support** (`support`)
+```
+
+#### Benefits
+- **User-Friendly**: Non-technical users can understand responses
+- **Complete**: Technical details still available for troubleshooting
+- **Consistent**: All responses follow the same formatting pattern
+- **Scannable**: Bold names and code-formatted IDs make information easy to parse
+
+---
+
+## Previous Updates (February 6, 2026)
 
 ### Member Management & FGA Sync Fix
 - **Fixed critical bug**: Members now properly added to BOTH Auth0 organizations AND FGA

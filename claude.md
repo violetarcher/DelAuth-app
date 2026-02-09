@@ -303,6 +303,149 @@ npm run lint
 
 ## Recent Updates
 
+### Manual Refresh Mode (February 9, 2026)
+
+**UI no longer auto-refreshes after member operations - user controls when to refresh**
+
+#### What Changed
+Removed automatic UI refresh after all member management operations. Users now manually click the **Refresh** button when ready to see updated member list.
+
+#### Modified Components
+1. **InviteModal.tsx** (`src/components/admin/InviteModal.tsx:53-58`)
+   - Removed `onSuccess()` callback after invitation sent
+   - Removed `onSuccess` prop from interface
+
+2. **AddMemberModal.tsx** (`src/components/admin/AddMemberModal.tsx:54-58`)
+   - Removed `onSuccess()` callback after member added
+   - Removed `onSuccess` prop from interface
+
+3. **UpdateRolesModal.tsx** (`src/components/admin/UpdateRolesModal.tsx:59-61`)
+   - Removed `onSuccess()` callback after roles updated
+   - Removed `onSuccess` prop from interface
+
+4. **ActionButtons.tsx** (`src/components/admin/ActionButtons.tsx:50-51,80-81,115-116`)
+   - Removed `onUpdate()` callback after MFA reset
+   - Removed `onUpdate()` callback after member removed
+   - Removed `onUpdate()` callback after user deleted
+   - Removed `onUpdate` prop from interface
+
+5. **MemberCard.tsx** (`src/components/admin/MemberCard.tsx:12-15`)
+   - Removed `onUpdate` prop from interface and component
+
+6. **MemberList.tsx** (`src/components/admin/MemberList.tsx`)
+   - No longer passes `onSuccess`/`onUpdate` to modals and cards
+
+#### User Experience
+**After any operation (invite, add, update roles, remove, delete, reset MFA):**
+- ✅ Success toast notification displays
+- ✅ Modal closes automatically
+- ❌ UI does NOT auto-refresh
+- ✅ User clicks **Refresh** button when ready
+- 💡 Toast reminder: "Click the Refresh button to see updated member list"
+
+#### Benefits
+- **User control**: Refresh only when ready, not forced
+- **Performance**: Reduces unnecessary API calls
+- **Better UX**: User can complete multiple operations before refreshing
+- **FGA monitoring**: Can observe FGA tuple changes in activity panel before refresh
+
+---
+
+### Enhanced AI Assistant Welcome Display (February 9, 2026)
+
+**Completely redesigned welcome screen with comprehensive capability overview**
+
+#### What Changed
+Replaced simple welcome message with detailed, organized display of all AI assistant capabilities.
+
+#### Implementation
+**ChatInterface.tsx** (`src/components/chat/ChatInterface.tsx:278-368`)
+
+#### New Welcome Screen Features
+
+**1. Friendly Greeting**
+```
+👋 Welcome to your AI Assistant
+I can help you manage your organization members and roles. Just ask me in plain English!
+```
+
+**2. Color-Coded Capability Sections**
+
+**🔵 View & Information** (Blue section)
+- List all organization members
+- Get member profile and details
+- Check my profile and permissions
+- View available roles and their permissions
+
+**🟢 Member Management** (Green section)
+- Invite new members by email
+- Add existing Auth0 users to organization
+- Update member roles (requires verification)
+- Remove members from organization (requires verification)
+- Permanently delete users (requires verification)
+
+**🟣 MFA & Security** (Purple section)
+- Check member MFA enrollment status
+- View enrolled authentication methods
+- Reset member MFA (requires verification)
+
+**3. Example Commands Grid**
+Shows 4 practical examples:
+- "List all members"
+- "Add john@example.com as admin"
+- "Reset MFA for jane@example.com"
+- "What are my permissions?"
+
+**4. Natural Language Tip**
+💡 Reminds users they can use emails, names, or user IDs
+
+#### Benefits
+- **Discoverability**: Users immediately see all available capabilities
+- **Visual clarity**: Color-coded sections make it easy to scan
+- **Practical examples**: Shows exactly how to phrase commands
+- **Reduces support**: Self-documenting interface
+- **Professional appearance**: Polished, user-friendly design
+
+---
+
+### Anchored Action Buttons (February 9, 2026)
+
+**Action buttons now pinned at top - only member list scrolls**
+
+#### What Changed
+Moved action buttons (Invite Member, Add Existing Member, Refresh) from scrollable area to anchored position at top of admin panel.
+
+#### Implementation
+
+**1. AdminPanel.tsx** (`src/components/dashboard/AdminPanel.tsx:71-99`)
+- Added new pinned section for action buttons
+- Moved button logic from MemberList to AdminPanel
+- Added state management for modals (`inviteModalOpen`, `addModalOpen`)
+
+**2. MemberList.tsx** (`src/components/admin/MemberList.tsx`)
+- Removed action buttons section
+- Changed to accept modal state props from parent
+- Buttons removed from component, controlled by AdminPanel
+
+#### New Layout Structure
+
+**Fixed sections (always visible):**
+1. 📋 **Header** - "Member Management"
+2. 📊 **FGA Activity Panel** - Real-time authorization monitoring
+3. 🔍 **Search Bar** - Filter members
+4. 🎯 **Action Buttons** - Invite Member, Add Existing Member, Refresh ← **NEW POSITION**
+
+**Scrollable section:**
+5. 📜 **Member List** - Member cards (scrolls independently)
+
+#### Benefits
+- **Always accessible**: Action buttons remain visible when scrolling
+- **Better UX**: No need to scroll to top to perform actions
+- **Consistent**: Matches FGA Activity Panel and Search Bar behavior
+- **Efficient workflow**: Perform operations on any member without losing button access
+
+---
+
 ### Natural Language Input Support (February 9, 2026)
 
 **Chatbot now accepts emails, names, and natural language for all operations**

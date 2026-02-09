@@ -10,14 +10,12 @@ interface InviteModalProps {
   isOpen: boolean
   onClose: () => void
   organizationId: string
-  onSuccess: () => void
 }
 
 export function InviteModal({
   isOpen,
   onClose,
   organizationId,
-  onSuccess,
 }: InviteModalProps) {
   const [email, setEmail] = useState('')
   const [roles, setRoles] = useState<string[]>([])
@@ -53,7 +51,7 @@ export function InviteModal({
       toast.success('Invitation sent successfully')
       setEmail('')
       setRoles([])
-      onSuccess()
+      // onSuccess() - Removed: User will manually refresh when ready
       onClose()
     } catch (error) {
       console.error('Error inviting member:', error)

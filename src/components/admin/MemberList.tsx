@@ -4,10 +4,8 @@ import { useEffect, useState } from 'react'
 import { MemberCard } from './MemberCard'
 import { InviteModal } from './InviteModal'
 import { AddMemberModal } from './AddMemberModal'
-import { Button } from '../ui/Button'
 import { LoadingSpinner } from '../ui/LoadingSpinner'
 import { ErrorAlert } from '../ui/ErrorAlert'
-import { PlusIcon, UserPlusIcon, ArrowPathIcon } from '@heroicons/react/24/outline'
 import type { Member } from '@/types/member'
 
 interface MemberListProps {
@@ -15,6 +13,10 @@ interface MemberListProps {
   searchQuery: string
   refreshTrigger: number
   onRefresh: () => void
+  inviteModalOpen: boolean
+  setInviteModalOpen: (open: boolean) => void
+  addModalOpen: boolean
+  setAddModalOpen: (open: boolean) => void
 }
 
 export function MemberList({
@@ -22,12 +24,14 @@ export function MemberList({
   searchQuery,
   refreshTrigger,
   onRefresh,
+  inviteModalOpen,
+  setInviteModalOpen,
+  addModalOpen,
+  setAddModalOpen,
 }: MemberListProps) {
   const [members, setMembers] = useState<Member[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [inviteModalOpen, setInviteModalOpen] = useState(false)
-  const [addModalOpen, setAddModalOpen] = useState(false)
 
   useEffect(() => {
     async function fetchMembers() {
@@ -92,34 +96,6 @@ export function MemberList({
 
   return (
     <div className="space-y-4">
-      {/* Action Buttons */}
-      <div className="flex gap-3 items-center">
-        <Button
-          onClick={() => setInviteModalOpen(true)}
-          className="flex items-center gap-2"
-        >
-          <UserPlusIcon className="h-5 w-5" />
-          Invite Member
-        </Button>
-        <Button
-          onClick={() => setAddModalOpen(true)}
-          variant="secondary"
-          className="flex items-center gap-2"
-        >
-          <PlusIcon className="h-5 w-5" />
-          Add Existing Member
-        </Button>
-        <Button
-          onClick={onRefresh}
-          variant="secondary"
-          className="flex items-center gap-2"
-          title="Refresh member list"
-        >
-          <ArrowPathIcon className={`h-5 w-5 ${loading ? 'animate-spin' : ''}`} />
-          Refresh
-        </Button>
-      </div>
-
       {/* Member Cards */}
       {filteredMembers.length === 0 ? (
         <div className="text-center py-12 bg-white rounded-lg border border-gray-200">
@@ -129,14 +105,19 @@ export function MemberList({
         </div>
       ) : (
         <div className="grid gap-2">
-          {filteredMembers.map((member) => (
-            <MemberCard
-              key={member.user_id}
-              member={member}
-              organizationId={organizationId}
-              onUpdate={onRefresh}
-            />
-          ))}
+          {filteredMembers.map((member) => {
+            // Include roles in key to force re-render when roles change
+            const rolesKey = [...(member.fgaRoles || []), ...(member.roles || [])].sort().join(',')
+            const memberKey = `${member.user_id}-${rolesKey}-${refreshTrigger}`
+
+            return (
+              <MemberCard
+                key={memberKey}
+                member={member}
+                organizationId={organizationId}
+              />
+            )
+          })}
         </div>
       )}
 
@@ -145,14 +126,12 @@ export function MemberList({
         isOpen={inviteModalOpen}
         onClose={() => setInviteModalOpen(false)}
         organizationId={organizationId}
-        onSuccess={onRefresh}
       />
 
       <AddMemberModal
         isOpen={addModalOpen}
         onClose={() => setAddModalOpen(false)}
         organizationId={organizationId}
-        onSuccess={onRefresh}
       />
     </div>
   )

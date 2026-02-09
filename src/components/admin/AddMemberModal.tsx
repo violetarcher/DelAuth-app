@@ -10,14 +10,12 @@ interface AddMemberModalProps {
   isOpen: boolean
   onClose: () => void
   organizationId: string
-  onSuccess: () => void
 }
 
 export function AddMemberModal({
   isOpen,
   onClose,
   organizationId,
-  onSuccess,
 }: AddMemberModalProps) {
   const [email, setEmail] = useState('')
   const [roles, setRoles] = useState<string[]>([])
@@ -54,7 +52,7 @@ export function AddMemberModal({
       toast.success('Member added successfully')
       setEmail('')
       setRoles([])
-      onSuccess()
+      // onSuccess() - Removed: User will manually refresh when ready
       onClose()
     } catch (error) {
       console.error('Error adding member:', error)

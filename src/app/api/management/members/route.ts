@@ -73,10 +73,19 @@ export async function GET(request: NextRequest) {
       })
     )
 
-    return NextResponse.json({
-      success: true,
-      members: membersWithRoles,
-    })
+    return NextResponse.json(
+      {
+        success: true,
+        members: membersWithRoles,
+      },
+      {
+        headers: {
+          'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+          'Pragma': 'no-cache',
+          'Expires': '0',
+        },
+      }
+    )
   } catch (error) {
     console.error('Error fetching members:', error)
     return NextResponse.json(
@@ -85,3 +94,7 @@ export async function GET(request: NextRequest) {
     )
   }
 }
+
+// Disable Next.js static optimization for this route
+export const dynamic = 'force-dynamic'
+export const revalidate = 0

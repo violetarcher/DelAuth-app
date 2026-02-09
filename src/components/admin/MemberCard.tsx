@@ -12,10 +12,9 @@ import type { Member } from '@/types/member'
 interface MemberCardProps {
   member: Member
   organizationId: string
-  onUpdate: () => void
 }
 
-export function MemberCard({ member, organizationId, onUpdate }: MemberCardProps) {
+export function MemberCard({ member, organizationId }: MemberCardProps) {
   const [updateRolesModalOpen, setUpdateRolesModalOpen] = useState(false)
   const [copied, setCopied] = useState(false)
 
@@ -148,7 +147,6 @@ export function MemberCard({ member, organizationId, onUpdate }: MemberCardProps
             <ActionButtons
               member={member}
               organizationId={organizationId}
-              onUpdate={onUpdate}
               onUpdateRoles={() => setUpdateRolesModalOpen(true)}
             />
           </div>
@@ -161,7 +159,6 @@ export function MemberCard({ member, organizationId, onUpdate }: MemberCardProps
         onClose={() => setUpdateRolesModalOpen(false)}
         member={member}
         organizationId={organizationId}
-        onSuccess={onUpdate}
       />
     </>
   )

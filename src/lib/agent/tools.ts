@@ -639,6 +639,30 @@ export async function updateMemberRoles(
       }
     }
 
+    // CRITICAL: Check if agent is using current roles (a common bug)
+    // Get current roles BEFORE doing anything else to detect if they're being reused
+    const currentRoles = await getUserFGARoles(userId, context.organizationId)
+    console.log(`🔍 Current FGA roles for ${userId}:`, currentRoles)
+    console.log(`🔍 Requested new roles:`, roles)
+
+    // Detect if agent is just passing back the current roles (parameter reuse bug)
+    const rolesAreSame =
+      roles.length === currentRoles.length &&
+      roles.every(r => currentRoles.includes(r)) &&
+      currentRoles.every(r => roles.includes(r))
+
+    if (rolesAreSame) {
+      console.error('❌ AGENT BUG DETECTED: Agent is trying to update roles to the SAME roles user already has!')
+      console.error(`   This means the agent is reusing current roles instead of getting new ones from user`)
+      console.error(`   Current roles: ${currentRoles.join(', ')}`)
+      console.error(`   "New" roles: ${roles.join(', ')}`)
+
+      return {
+        success: false,
+        error: 'AGENT_ERROR: You are trying to update roles to the same roles the user already has. This suggests you are reusing the current roles instead of asking the user for NEW roles. You must ask the user which roles they want to assign. NEVER use the member\'s current roles as the parameter value.',
+      }
+    }
+
     // Get user details for display
     const userInfo = await resolveUserIdentifier(userIdentifier)
 
@@ -682,12 +706,11 @@ export async function updateMemberRoles(
 
     const roleNames = validRoles as FGARole[]
 
-    // Get current FGA roles for the user
-    const currentRoles = await getUserFGARoles(userId, context.organizationId)
+    // currentRoles was already fetched earlier for validation
     console.log('=== UPDATE MEMBER ROLES DEBUG ===')
     console.log(`User ID: ${userId}`)
     console.log(`Organization ID: ${context.organizationId}`)
-    console.log(`Current FGA roles:`, currentRoles)
+    console.log(`Current FGA roles (from earlier check):`, currentRoles)
     console.log(`New roles requested:`, roleNames)
 
     // Calculate roles to add and remove

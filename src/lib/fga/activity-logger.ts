@@ -19,6 +19,43 @@ class FGAActivityLogger {
   private activities: FGAActivity[] = []
   private listeners: Set<(activity: FGAActivity) => void> = new Set()
   private maxActivities = 100
+  private storageKey = 'fga_activities'
+
+  constructor() {
+    // Load activities from localStorage on initialization
+    this.loadFromStorage()
+  }
+
+  /**
+   * Load activities from localStorage
+   */
+  private loadFromStorage() {
+    if (typeof window !== 'undefined') {
+      try {
+        const stored = localStorage.getItem(this.storageKey)
+        if (stored) {
+          this.activities = JSON.parse(stored)
+          console.log(`📦 Loaded ${this.activities.length} FGA activities from localStorage`)
+        }
+      } catch (error) {
+        console.error('Failed to load FGA activities from localStorage:', error)
+        this.activities = []
+      }
+    }
+  }
+
+  /**
+   * Save activities to localStorage
+   */
+  private saveToStorage() {
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem(this.storageKey, JSON.stringify(this.activities))
+      } catch (error) {
+        console.error('Failed to save FGA activities to localStorage:', error)
+      }
+    }
+  }
 
   /**
    * Log an FGA check operation
@@ -126,6 +163,9 @@ class FGAActivityLogger {
       this.activities = this.activities.slice(0, this.maxActivities)
     }
 
+    // Save to localStorage for persistence
+    this.saveToStorage()
+
     // Notify all listeners
     this.listeners.forEach((listener) => listener(activity))
   }
@@ -154,6 +194,8 @@ class FGAActivityLogger {
    */
   clear() {
     this.activities = []
+    this.saveToStorage() // Persist the cleared state
+    console.log('🗑️ FGA activities cleared and localStorage updated')
   }
 }
 

@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react'
 import { MemberList } from '../admin/MemberList'
 import { MemberSearch } from '../admin/MemberSearch'
 import { FGAActivityPanel } from '../fga/FGAActivityPanel'
+import { Button } from '../ui/Button'
+import { PlusIcon, UserPlusIcon, ArrowPathIcon } from '@heroicons/react/24/outline'
 import { onMemberEvent, MEMBER_EVENTS } from '@/lib/events/memberEvents'
 
 interface AdminPanelProps {
@@ -14,6 +16,9 @@ interface AdminPanelProps {
 export function AdminPanel({ userId, organizationId }: AdminPanelProps) {
   const [searchQuery, setSearchQuery] = useState('')
   const [refreshTrigger, setRefreshTrigger] = useState(0)
+  const [inviteModalOpen, setInviteModalOpen] = useState(false)
+  const [addModalOpen, setAddModalOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
 
   const handleRefresh = () => {
     console.log('🔄 AdminPanel handleRefresh called, current refreshTrigger:', refreshTrigger)
@@ -63,6 +68,36 @@ export function AdminPanel({ userId, organizationId }: AdminPanelProps) {
         />
       </div>
 
+      {/* Action Buttons - Always Visible (Pinned) */}
+      <div className="bg-gray-50 px-6 pt-4">
+        <div className="flex gap-3 items-center">
+          <Button
+            onClick={() => setInviteModalOpen(true)}
+            className="flex items-center gap-2"
+          >
+            <UserPlusIcon className="h-5 w-5" />
+            Invite Member
+          </Button>
+          <Button
+            onClick={() => setAddModalOpen(true)}
+            variant="secondary"
+            className="flex items-center gap-2"
+          >
+            <PlusIcon className="h-5 w-5" />
+            Add Existing Member
+          </Button>
+          <Button
+            onClick={handleRefresh}
+            variant="secondary"
+            className="flex items-center gap-2"
+            title="Refresh member list"
+          >
+            <ArrowPathIcon className={`h-5 w-5 ${loading ? 'animate-spin' : ''}`} />
+            Refresh
+          </Button>
+        </div>
+      </div>
+
       {/* Member List - Scrollable */}
       <div className="flex-1 overflow-y-auto px-6 pt-4 pb-6">
         <MemberList
@@ -70,6 +105,10 @@ export function AdminPanel({ userId, organizationId }: AdminPanelProps) {
           searchQuery={searchQuery}
           refreshTrigger={refreshTrigger}
           onRefresh={handleRefresh}
+          inviteModalOpen={inviteModalOpen}
+          setInviteModalOpen={setInviteModalOpen}
+          addModalOpen={addModalOpen}
+          setAddModalOpen={setAddModalOpen}
         />
       </div>
     </div>

@@ -11,7 +11,6 @@ interface UpdateRolesModalProps {
   onClose: () => void
   member: Member
   organizationId: string
-  onSuccess: () => void
 }
 
 export function UpdateRolesModal({
@@ -19,7 +18,6 @@ export function UpdateRolesModal({
   onClose,
   member,
   organizationId,
-  onSuccess,
 }: UpdateRolesModalProps) {
   const [selectedRoles, setSelectedRoles] = useState<string[]>(member.roles || [])
   const [loading, setLoading] = useState(false)
@@ -57,7 +55,7 @@ export function UpdateRolesModal({
       }
 
       toast.success('Roles updated successfully')
-      onSuccess()
+      // onSuccess() - Removed: User will manually refresh when ready
       onClose()
     } catch (error) {
       console.error('Error updating roles:', error)

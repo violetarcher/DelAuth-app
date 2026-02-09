@@ -15,14 +15,12 @@ import type { Member } from '@/types/member'
 interface ActionButtonsProps {
   member: Member
   organizationId: string
-  onUpdate: () => void
   onUpdateRoles: () => void
 }
 
 export function ActionButtons({
   member,
   organizationId,
-  onUpdate,
   onUpdateRoles,
 }: ActionButtonsProps) {
   const [loading, setLoading] = useState(false)
@@ -48,7 +46,7 @@ export function ActionButtons({
       }
 
       toast.success('MFA reset successfully')
-      onUpdate()
+      // onUpdate() - Removed: User will manually refresh when ready
     } catch (error) {
       console.error('Error resetting MFA:', error)
       toast.error('Failed to reset MFA')
@@ -78,7 +76,7 @@ export function ActionButtons({
       }
 
       toast.success('Member removed successfully')
-      onUpdate()
+      // onUpdate() - Removed: User will manually refresh when ready
     } catch (error) {
       console.error('Error removing member:', error)
       toast.error('Failed to remove member')
@@ -113,7 +111,7 @@ export function ActionButtons({
       }
 
       toast.success('User deleted successfully')
-      onUpdate()
+      // onUpdate() - Removed: User will manually refresh when ready
     } catch (error) {
       console.error('Error deleting user:', error)
       toast.error('Failed to delete user')

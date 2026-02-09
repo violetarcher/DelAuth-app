@@ -52,11 +52,33 @@ export function ChatInterface({ organizationId, userId }: ChatInterfaceProps) {
     setLoading(true)
 
     try {
+      // Filter out CIBA-related system messages from conversation history
+      // to prevent OpenAI from thinking previous approvals apply to new operations
+      const cleanMessages = messages.filter(msg => {
+        if (msg.role === 'assistant' && msg.content) {
+          // Remove messages that indicate CIBA approval/verification
+          const cibaKeywords = [
+            'Guardian Push verification',
+            'Guardian Push approved',
+            'Executing operation',
+            'Sending notification to your phone'
+          ]
+          const isCIBAMessage = cibaKeywords.some(keyword => msg.content?.includes(keyword))
+          if (isCIBAMessage) {
+            console.log('🧹 Filtering out CIBA message from context:', msg.content?.substring(0, 50))
+          }
+          return !isCIBAMessage
+        }
+        return true
+      })
+
+      console.log(`📤 Sending ${cleanMessages.length} messages to OpenAI (filtered ${messages.length - cleanMessages.length} CIBA messages)`)
+
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          messages: [...messages, userMessage],
+          messages: [...cleanMessages, userMessage],
           organizationId,
           cibaVerified,
         }),
@@ -152,14 +174,19 @@ export function ChatInterface({ organizationId, userId }: ChatInterfaceProps) {
         assistantMessage.includes(op)
       )
 
+      console.log('🔍 Checking if should refresh. Message:', assistantMessage.substring(0, 100))
+      console.log('🔍 Should refresh:', shouldRefresh)
+
       if (shouldRefresh) {
-        console.log('✅ Operation completed, refreshing member list')
-        // Show toast notification
-        toast.success('Member list updated', { duration: 2000 })
-        // Delay refresh slightly to ensure backend has processed
+        console.log('✅ Operation completed, scheduling member list refresh')
+        console.log('⏰ Will refresh in 300ms...')
+        // Small delay to allow streaming response to complete
         setTimeout(() => {
+          console.log('🔄 Triggering member list refresh NOW via event')
           refreshMemberList()
-        }, 500)
+          console.log('✅ refreshMemberList() called')
+          toast.success('Member list refreshed', { duration: 1500 })
+        }, 300) // 300ms is enough - FGA writes are synchronous and verified before returning
       }
     } catch (error) {
       console.error('Chat error:', error)

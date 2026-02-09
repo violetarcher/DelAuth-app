@@ -17,9 +17,16 @@ export type MemberEventType = typeof MEMBER_EVENTS[keyof typeof MEMBER_EVENTS]
  */
 export function emitMemberEvent(eventType: MemberEventType, data?: any) {
   if (typeof window !== 'undefined') {
+    console.log('📤 Emitting member event:', eventType, data)
     const event = new CustomEvent(eventType, { detail: data })
     window.dispatchEvent(event)
-    console.log('🔔 Member event emitted:', eventType, data)
+    console.log('✅ Member event dispatched successfully:', eventType)
+
+    // Verify listeners are registered
+    const hasListeners = window.EventTarget.prototype.addEventListener !== undefined
+    console.log('🎯 Window has event system:', hasListeners)
+  } else {
+    console.warn('⚠️ Cannot emit event - window is undefined (SSR context)')
   }
 }
 

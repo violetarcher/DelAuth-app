@@ -16,17 +16,26 @@ export function AdminPanel({ userId, organizationId }: AdminPanelProps) {
   const [refreshTrigger, setRefreshTrigger] = useState(0)
 
   const handleRefresh = () => {
-    setRefreshTrigger((prev) => prev + 1)
+    console.log('🔄 AdminPanel handleRefresh called, current refreshTrigger:', refreshTrigger)
+    setRefreshTrigger((prev) => {
+      const newValue = prev + 1
+      console.log('✅ refreshTrigger updated:', prev, '→', newValue)
+      return newValue
+    })
   }
 
   // Listen for member events from chat operations
   useEffect(() => {
+    console.log('👂 AdminPanel setting up event listener for REFRESH_MEMBERS')
     const unsubscribe = onMemberEvent(MEMBER_EVENTS.REFRESH_MEMBERS, () => {
-      console.log('📋 Refreshing member list...')
+      console.log('🔔 AdminPanel received REFRESH_MEMBERS event!')
       handleRefresh()
     })
 
-    return unsubscribe
+    return () => {
+      console.log('🧹 AdminPanel cleaning up event listener')
+      unsubscribe()
+    }
   }, [])
 
   return (

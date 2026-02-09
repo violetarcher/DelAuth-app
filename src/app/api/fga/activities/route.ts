@@ -17,7 +17,11 @@ export async function GET(request: NextRequest) {
       activities,
     })
   } catch (error) {
-    console.error('FGA activities error:', error)
+    // Only log errors if not suppressed (for high-frequency polling)
+    const suppressLogs = request.headers.get('X-Suppress-Logs') === 'true'
+    if (!suppressLogs) {
+      console.error('FGA activities error:', error)
+    }
     return NextResponse.json(
       { error: 'Failed to fetch activities' },
       { status: 500 }

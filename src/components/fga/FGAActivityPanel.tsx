@@ -25,12 +25,18 @@ export function FGAActivityPanel() {
 
   const fetchActivities = useCallback(async () => {
     try {
-      const response = await fetch('/api/fga/activities')
+      const response = await fetch('/api/fga/activities', {
+        // Suppress logging for this high-frequency polling endpoint
+        headers: {
+          'X-Suppress-Logs': 'true'
+        }
+      })
       if (response.ok) {
         const data = await response.json()
         setActivities(data.activities || [])
       }
     } catch (error) {
+      // Only log errors, not successful polling
       console.error('Failed to fetch activities:', error)
     }
   }, [])
@@ -57,7 +63,7 @@ export function FGAActivityPanel() {
 
   useEffect(() => {
     if (autoRefresh) {
-      const interval = setInterval(fetchActivities, 1000) // Refresh every second
+      const interval = setInterval(fetchActivities, 2000) // Refresh every 2 seconds (reduced noise)
       return () => clearInterval(interval)
     }
   }, [autoRefresh, fetchActivities])

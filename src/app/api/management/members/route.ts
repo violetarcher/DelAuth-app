@@ -46,6 +46,11 @@ export async function GET(request: NextRequest) {
           // Fetch FGA ReBAC roles
           const fgaRoles = await getUserFGARoles(member.user_id, organizationId)
 
+          console.log(`👤 Roles for ${member.email}:`, {
+            auth0Roles: auth0Roles.map((r: any) => r.name),
+            fgaRoles: fgaRoles,
+          })
+
           return {
             user_id: member.user_id,
             name: member.name,

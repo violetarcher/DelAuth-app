@@ -7,7 +7,7 @@
 
 import axios from 'axios'
 import { checkPermission } from '@/lib/fga/checks'
-import { assignRole as writeFGARole, removeAllUserRoles, updateUserRoles } from '@/lib/fga/writes'
+import { assignRole as writeFGARole, removeAllUserRoles, updateUserRoles, getUserFGARoles } from '@/lib/fga/writes'
 import { FGAPermission } from '@/types/fga'
 import { normalizeToUserId, isEmail, resolveUserIdentifier } from '@/lib/auth0/user-resolver'
 
@@ -612,10 +612,24 @@ export async function addMember(
 export async function updateMemberRoles(
   context: AgentContext,
   userIdentifier: string,
-  roles: string[],
+  roles?: string[],
   cibaVerified: boolean = false
 ): Promise<ToolResult> {
   try {
+    // CRITICAL: Check if roles were provided
+    // If not, the agent must ask the user - never reuse old roles
+    // Also reject if it's explicitly undefined (agent should not call this function at all)
+    if (roles === undefined || roles === null || roles.length === 0) {
+      return {
+        success: false,
+        error: 'AGENT_ERROR: Roles not provided. You must ask the user which roles to assign using the standard role selection format. NEVER reuse roles from previous messages. NEVER call this function if the user did not explicitly specify roles in their current message. Each update operation requires fresh, explicit role selection from the user.',
+      }
+    }
+
+    // Additional check: Log a warning if we suspect the agent is using default/inferred roles
+    console.log(`⚠️ updateMemberRoles called with roles:`, roles)
+    console.log(`⚠️ If user did NOT explicitly specify these roles, this is a bug!`)
+
     // Resolve email to user ID if needed
     const userId = await normalizeToUserId(userIdentifier)
     if (!userId) {
@@ -668,19 +682,67 @@ export async function updateMemberRoles(
 
     const roleNames = validRoles as FGARole[]
 
+    // Get current FGA roles for the user
+    const currentRoles = await getUserFGARoles(userId, context.organizationId)
+    console.log('=== UPDATE MEMBER ROLES DEBUG ===')
+    console.log(`User ID: ${userId}`)
+    console.log(`Organization ID: ${context.organizationId}`)
+    console.log(`Current FGA roles:`, currentRoles)
+    console.log(`New roles requested:`, roleNames)
+
+    // Calculate roles to add and remove
+    const rolesToAdd = roleNames.filter(role => !currentRoles.includes(role))
+    const rolesToRemove = currentRoles.filter(role => !roleNames.includes(role))
+
+    console.log(`Roles to add:`, rolesToAdd)
+    console.log(`Roles to remove:`, rolesToRemove)
+
     // Update FGA tuples - this replaces all existing roles with the new set
-    await updateUserRoles(
+    console.log(`Calling updateUserRoles...`)
+    const updateSuccess = await updateUserRoles(
       userId,
       context.organizationId,
-      roleNames,
-      [] // updateUserRoles will figure out what to remove
+      rolesToAdd,
+      rolesToRemove
     )
+
+    console.log(`updateUserRoles returned: ${updateSuccess}`)
+
+    if (!updateSuccess) {
+      return {
+        success: false,
+        error: 'Failed to update FGA roles',
+      }
+    }
+
+    // Verify the update by reading roles again
+    const verifyRoles = await getUserFGARoles(userId, context.organizationId)
+    console.log(`Roles after update (verification):`, verifyRoles)
+    console.log('=== END DEBUG ===')
+
+    // Check if verification matches expected roles
+    const rolesMismatch = !roleNames.every(r => verifyRoles.includes(r)) || !verifyRoles.every(r => roleNames.includes(r))
+    if (rolesMismatch) {
+      console.error('⚠️ ROLES MISMATCH AFTER UPDATE!')
+      console.error(`Expected: ${roleNames.join(', ')}`)
+      console.error(`Actual: ${verifyRoles.join(', ')}`)
+    }
 
     // Get org details for response
     const orgDetails = await getOrganizationDetails(context.organizationId)
 
     // Format roles for display
     const formattedNewRoles = roleNames.map(formatRoleDisplay)
+    const formattedAddedRoles = rolesToAdd.map(formatRoleDisplay)
+    const formattedRemovedRoles = rolesToRemove.map(formatRoleDisplay)
+
+    let changesSummary = ''
+    if (rolesToAdd.length > 0) {
+      changesSummary += `\n  • Added: ${formattedAddedRoles.join(', ')}`
+    }
+    if (rolesToRemove.length > 0) {
+      changesSummary += `\n  • Removed: ${formattedRemovedRoles.join(', ')}`
+    }
 
     return {
       success: true,
@@ -692,7 +754,9 @@ export async function updateMemberRoles(
         organizationId: context.organizationId,
         newRoles: roleNames,
         formattedNewRoles: formattedNewRoles,
-        message: `✅ Roles updated for **${userInfo?.name || userInfo?.email}** in **${orgDetails.displayName}**. New roles: ${formattedNewRoles.join(', ')}`,
+        rolesAdded: rolesToAdd,
+        rolesRemoved: rolesToRemove,
+        message: `✅ Roles updated for **${userInfo?.name || userInfo?.email}** in **${orgDetails.displayName}**.\n\nNew roles: ${formattedNewRoles.join(', ')}${changesSummary}`,
       },
     }
   } catch (error: any) {
@@ -989,6 +1053,30 @@ export async function resetMemberMFA(
     // Get org details for response
     const orgDetails = await getOrganizationDetails(context.organizationId)
 
+    // Send enrollment invitation
+    let enrollmentTicket = null
+    try {
+      const ticketResponse = await axios.post(
+        `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/guardian/enrollments/ticket`,
+        {
+          user_id: userId,
+          email: userInfo?.email,
+          send_mail: true, // Automatically send email to user
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${mgmtToken}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      )
+      enrollmentTicket = ticketResponse.data
+      console.log('✉️ MFA enrollment invitation sent to:', userInfo?.email)
+    } catch (enrollmentError: any) {
+      console.error('Failed to send enrollment invitation:', enrollmentError.response?.data || enrollmentError.message)
+      // Don't fail the whole operation if invitation fails
+    }
+
     return {
       success: true,
       data: {
@@ -998,7 +1086,10 @@ export async function resetMemberMFA(
         organizationName: orgDetails.displayName,
         methodsDeleted: deletedCount,
         totalMethods: authMethods.length,
-        message: `✅ MFA reset successful for **${userInfo?.name || userInfo?.email}** in **${orgDetails.displayName}**. Removed ${deletedCount} of ${authMethods.length} authentication method(s).`,
+        enrollmentTicketSent: !!enrollmentTicket,
+        message: enrollmentTicket
+          ? `✅ MFA reset successful for **${userInfo?.name || userInfo?.email}** in **${orgDetails.displayName}**. Removed ${deletedCount} of ${authMethods.length} authentication method(s). An enrollment invitation has been sent to **${userInfo?.email}**.`
+          : `✅ MFA reset successful for **${userInfo?.name || userInfo?.email}** in **${orgDetails.displayName}**. Removed ${deletedCount} of ${authMethods.length} authentication method(s).`,
       },
     }
   } catch (error: any) {
@@ -1015,6 +1106,129 @@ export async function resetMemberMFA(
     return {
       success: false,
       error: error.response?.data?.message || 'Failed to reset MFA',
+    }
+  }
+}
+
+/**
+ * Check MFA enrollment status for a member
+ * Returns details about what authentication methods they have enrolled
+ */
+export async function checkMemberMFA(
+  context: AgentContext,
+  userIdentifier: string
+): Promise<ToolResult> {
+  try {
+    // Check FGA permission
+    const hasPermission = await checkPermission(
+      context.userId,
+      context.organizationId,
+      'can_view'
+    )
+
+    if (!hasPermission) {
+      return {
+        success: false,
+        error: 'You do not have permission to view member information',
+      }
+    }
+
+    // Resolve email to user ID if needed
+    const userId = await normalizeToUserId(userIdentifier)
+    if (!userId) {
+      return {
+        success: false,
+        error: createUserNotFoundError(userIdentifier),
+      }
+    }
+
+    // Get user details for display
+    const userInfo = await resolveUserIdentifier(userIdentifier)
+
+    // Get M2M token for Management API
+    const mgmtToken = await getManagementToken()
+
+    // Get all authentication methods for the user
+    const authMethodsResponse = await axios.get(
+      `${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/users/${encodeURIComponent(userId)}/authentication-methods`,
+      {
+        headers: {
+          Authorization: `Bearer ${mgmtToken}`,
+        },
+      }
+    )
+
+    const authMethods = authMethodsResponse.data || []
+
+    // Parse authentication methods into readable format
+    const methodDetails = authMethods.map((method: any) => {
+      const type = method.type || 'unknown'
+      const typeLabels: Record<string, string> = {
+        'phone': '📱 SMS',
+        'totp': '🔐 Authenticator App (TOTP)',
+        'push-notification': '📲 Push Notification (Guardian)',
+        'email': '📧 Email OTP',
+        'recovery-code': '🔑 Recovery Code',
+        'webauthn-roaming': '🔒 Security Key (WebAuthn)',
+        'webauthn-platform': '🔒 Platform Authenticator (WebAuthn)',
+      }
+
+      return {
+        id: method.id,
+        type: type,
+        label: typeLabels[type] || `❓ ${type}`,
+        name: method.name || 'Unnamed',
+        confirmed: method.confirmed || false,
+        createdAt: method.created_at,
+      }
+    })
+
+    // Get org details for response
+    const orgDetails = await getOrganizationDetails(context.organizationId)
+
+    const isEnrolled = authMethods.length > 0
+    const methodLabels = methodDetails.map(m => m.label).join(', ')
+
+    return {
+      success: true,
+      data: {
+        userName: userInfo?.name || userInfo?.email,
+        userEmail: userInfo?.email,
+        userId: userId,
+        organizationName: orgDetails.displayName,
+        isEnrolled: isEnrolled,
+        methodCount: authMethods.length,
+        methods: methodDetails,
+        message: isEnrolled
+          ? `🔐 **${userInfo?.name || userInfo?.email}** has MFA enrolled in **${orgDetails.displayName}**\n\nEnrolled methods (${authMethods.length}):\n${methodDetails.map(m => `• ${m.label}${m.confirmed ? ' ✓' : ' (unconfirmed)'}`).join('\n')}`
+          : `❌ **${userInfo?.name || userInfo?.email}** does not have MFA enrolled in **${orgDetails.displayName}**`,
+      },
+    }
+  } catch (error: any) {
+    console.error('checkMemberMFA error:', error)
+
+    // Handle 404 error specifically - usually means no MFA enrolled
+    if (error.response?.status === 404) {
+      const userInfo = await resolveUserIdentifier(userIdentifier)
+      const orgDetails = await getOrganizationDetails(context.organizationId)
+
+      return {
+        success: true,
+        data: {
+          userName: userInfo?.name || userInfo?.email,
+          userEmail: userInfo?.email,
+          organizationName: orgDetails.displayName,
+          isEnrolled: false,
+          methodCount: 0,
+          methods: [],
+          message: `❌ **${userInfo?.name || userInfo?.email}** does not have MFA enrolled in **${orgDetails.displayName}**`,
+        },
+      }
+    }
+
+    return {
+      success: false,
+      error: error.response?.data?.message || 'Failed to check MFA status',
     }
   }
 }
@@ -1152,7 +1366,7 @@ export const agentTools = [
     function: {
       name: 'add_member',
       description:
-        'ADD an EXISTING Auth0 user to the organization (for users who already have an account). ACCEPTS EMAIL OR USER ID. Requires can_add_member permission. Adds member to Auth0 org and writes FGA tuples. For NEW users, use invite_member instead.',
+        'ADD an EXISTING Auth0 user to the organization (for users who already have an account). ACCEPTS EMAIL OR USER ID. Supports MULTIPLE roles per user. Requires can_add_member permission. Adds member to Auth0 org and writes FGA tuples. For NEW users, use invite_member instead. If user does not specify which roles to assign, ASK THEM using the standard role selection format before calling this tool.',
       parameters: {
         type: 'object',
         properties: {
@@ -1163,7 +1377,7 @@ export const agentTools = [
           roles: {
             type: 'array',
             items: { type: 'string' },
-            description: 'Array of FGA role names (e.g., ["admin", "support"]). Valid roles: super_admin, admin, support, member. These are FGA relationship names, NOT Auth0 role IDs.',
+            description: 'Array of FGA role names. Can contain MULTIPLE roles (e.g., ["admin", "support"] assigns BOTH admin and support roles). Valid roles: super_admin, admin, support, member. These are FGA relationship names, NOT Auth0 role IDs.',
           },
         },
         required: ['userId'],
@@ -1175,7 +1389,7 @@ export const agentTools = [
     function: {
       name: 'update_member_roles',
       description:
-        'Update FGA roles for an organization member. ACCEPTS EMAIL OR USER ID. Requires can_update_roles permission and CIBA verification (automatic).',
+        'Update FGA roles for an organization member. ACCEPTS EMAIL OR USER ID. Supports MULTIPLE roles per user. Requires can_update_roles permission and CIBA verification (automatic). The roles array completely REPLACES the user\'s current roles (adds new ones, removes old ones). **CRITICAL - DO NOT CALL THIS FUNCTION UNLESS**: The user has EXPLICITLY specified role(s) IN THEIR CURRENT MESSAGE (e.g., "update to admin", "change roles to admin, support"). If the user did NOT specify roles (e.g., "update roles for X", "change X\'s roles"), you MUST respond with a question asking which roles to assign - DO NOT call this function. NEVER infer, guess, or reuse roles from conversation history. NEVER use current roles as default. If unsure whether roles were specified, ASK instead of calling this function.',
       parameters: {
         type: 'object',
         properties: {
@@ -1186,10 +1400,10 @@ export const agentTools = [
           roles: {
             type: 'array',
             items: { type: 'string' },
-            description: 'Complete new array of FGA role names (e.g., ["admin", "support"]) - these REPLACE existing roles. Valid roles: super_admin, admin, support, member. These are FGA relationship names.',
+            description: 'Complete new array of FGA role names. Can contain MULTIPLE roles (e.g., ["admin", "support"] for both admin AND support roles). These REPLACE existing roles completely. Valid roles: super_admin, admin, support, member. CRITICAL: Must come from the CURRENT user message only - NEVER reuse roles from earlier in the conversation history. If not provided in current message, DO NOT call this tool - ask user first.',
           },
         },
-        required: ['userId', 'roles'],
+        required: ['userId'],
       },
     },
   },
@@ -1232,9 +1446,27 @@ export const agentTools = [
   {
     type: 'function',
     function: {
+      name: 'check_member_mfa',
+      description:
+        'Check if a member has MFA enrolled and see what authentication methods they have enabled. ACCEPTS EMAIL OR USER ID. Returns enrollment status and detailed list of enrolled methods (Guardian Push, TOTP, SMS, etc.). Requires can_view permission. Use this when user asks "does X have MFA", "check MFA for X", "is X enrolled in MFA", "what MFA methods does X have", etc.',
+      parameters: {
+        type: 'object',
+        properties: {
+          userId: {
+            type: 'string',
+            description: 'User identifier - can be EITHER an email address (e.g., auth0archer@gmail.com, john@example.com) OR an Auth0 user ID (e.g., auth0|123...). Email addresses are automatically resolved.',
+          },
+        },
+        required: ['userId'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'reset_member_mfa',
       description:
-        'Reset all MFA enrollments for a member. ACCEPTS EMAIL OR USER ID. Requires can_reset_mfa permission and CIBA verification (automatic).',
+        'Reset all MFA enrollments for a member and automatically send a re-enrollment invitation email. ACCEPTS EMAIL OR USER ID. Requires can_reset_mfa permission and CIBA verification (automatic). After removing all authentication methods, an enrollment invitation is automatically sent to the user\'s email.',
       parameters: {
         type: 'object',
         properties: {
@@ -1314,6 +1546,9 @@ export async function executeTool(
 
     case 'delete_member':
       return deleteMember(context, args.userId, cibaVerified)
+
+    case 'check_member_mfa':
+      return checkMemberMFA(context, args.userId)
 
     case 'reset_member_mfa':
       return resetMemberMFA(context, args.userId, cibaVerified)

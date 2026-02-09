@@ -7,7 +7,7 @@ import { AddMemberModal } from './AddMemberModal'
 import { Button } from '../ui/Button'
 import { LoadingSpinner } from '../ui/LoadingSpinner'
 import { ErrorAlert } from '../ui/ErrorAlert'
-import { PlusIcon, UserPlusIcon } from '@heroicons/react/24/outline'
+import { PlusIcon, UserPlusIcon, ArrowPathIcon } from '@heroicons/react/24/outline'
 import type { Member } from '@/types/member'
 
 interface MemberListProps {
@@ -35,8 +35,18 @@ export function MemberList({
         setLoading(true)
         setError(null)
 
+        console.log('🔄 Fetching members (refreshTrigger:', refreshTrigger, ')')
+
+        // Add timestamp to prevent browser caching
+        const timestamp = Date.now()
         const response = await fetch(
-          `/api/management/members?organizationId=${organizationId}`
+          `/api/management/members?organizationId=${organizationId}&_t=${timestamp}`,
+          {
+            cache: 'no-store', // Force fresh fetch, no caching
+            headers: {
+              'Cache-Control': 'no-cache',
+            },
+          }
         )
 
         if (!response.ok) {
@@ -44,6 +54,7 @@ export function MemberList({
         }
 
         const data = await response.json()
+        console.log('✅ Members fetched:', data.members?.length, 'members')
         setMembers(data.members || [])
       } catch (err) {
         console.error('Error fetching members:', err)
@@ -82,7 +93,7 @@ export function MemberList({
   return (
     <div className="space-y-4">
       {/* Action Buttons */}
-      <div className="flex gap-3">
+      <div className="flex gap-3 items-center">
         <Button
           onClick={() => setInviteModalOpen(true)}
           className="flex items-center gap-2"
@@ -97,6 +108,15 @@ export function MemberList({
         >
           <PlusIcon className="h-5 w-5" />
           Add Existing Member
+        </Button>
+        <Button
+          onClick={onRefresh}
+          variant="secondary"
+          className="flex items-center gap-2"
+          title="Refresh member list"
+        >
+          <ArrowPathIcon className={`h-5 w-5 ${loading ? 'animate-spin' : ''}`} />
+          Refresh
         </Button>
       </div>
 

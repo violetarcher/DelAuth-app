@@ -29,14 +29,16 @@ export function ChatMessage({ message, onRoleSelect }: ChatMessageProps) {
     return null
   }
 
-  // Check if this is a role selection prompt
+  // Check if this is a role selection prompt (flexible pattern matching)
   const isRoleSelectionPrompt =
     !isUser &&
-    message.content.includes('Which role(s) would you like to assign')
+    (message.content.includes('Which role(s) would you like to assign') ||
+     message.content.includes('Please specify which role(s)') ||
+     (message.content.includes('role(s)') && message.content.includes('assign to')))
 
   // Extract email from role selection prompt if present
   const emailMatch = isRoleSelectionPrompt
-    ? message.content.match(/assign to ([^\s?]+)/)
+    ? message.content.match(/assign to ([^\s?,.\)]+)/)
     : null
   const email = emailMatch ? emailMatch[1] : ''
 

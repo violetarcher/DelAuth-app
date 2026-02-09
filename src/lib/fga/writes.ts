@@ -123,9 +123,13 @@ export async function updateUserRoles(
   rolesToRemove: Array<'super_admin' | 'admin' | 'support' | 'member'>
 ): Promise<boolean> {
   try {
+    console.log('=== FGA updateUserRoles ===')
     const client = getFGAClient()
     const formattedUser = formatFGAUser(userId)
     const formattedObject = formatFGAOrganization(organizationId)
+
+    console.log(`Formatted user: ${formattedUser}`)
+    console.log(`Formatted object: ${formattedObject}`)
 
     const writes = rolesToAdd.map((role) => ({
       user: formattedUser,
@@ -133,9 +137,12 @@ export async function updateUserRoles(
       object: formattedObject,
     }))
 
+    console.log(`Writes prepared (${writes.length}):`, writes)
+
     // Only delete roles that actually exist
     let deletes: Array<{ user: string; relation: FGARelation; object: string }> = []
     if (rolesToRemove.length > 0) {
+      console.log(`Reading existing tuples for deletion check...`)
       // Read existing tuples
       const readResponse = await client.read({
         user: formattedUser,
@@ -145,6 +152,9 @@ export async function updateUserRoles(
       const existingTuples = readResponse.tuples || []
       const existingRelations = existingTuples.map((t) => t.key.relation)
 
+      console.log(`Existing relations in FGA:`, existingRelations)
+      console.log(`Roles requested for removal:`, rolesToRemove)
+
       // Only delete roles that actually exist
       deletes = rolesToRemove
         .filter((role) => existingRelations.includes(role))
@@ -153,13 +163,20 @@ export async function updateUserRoles(
           relation: role as FGARelation,
           object: formattedObject,
         }))
+
+      console.log(`Deletes prepared (${deletes.length}):`, deletes)
     }
 
     if (writes.length > 0 || deletes.length > 0) {
-      await client.write({
+      console.log(`Calling FGA API with writes=${writes.length}, deletes=${deletes.length}`)
+      const writeRequest = {
         writes: writes.length > 0 ? writes : undefined,
         deletes: deletes.length > 0 ? deletes : undefined,
-      })
+      }
+      console.log(`FGA write request:`, JSON.stringify(writeRequest, null, 2))
+
+      const response = await client.write(writeRequest)
+      console.log(`FGA write response:`, response)
 
       // Log operations
       writes.forEach((w) => {
@@ -169,11 +186,20 @@ export async function updateUserRoles(
       deletes.forEach((d) => {
         fgaActivityLogger.logDelete(d.user, d.relation, d.object)
       })
+
+      console.log('✅ FGA write completed successfully')
+    } else {
+      console.log('⚠️ No writes or deletes to perform')
     }
 
+    console.log('=== END FGA updateUserRoles ===')
     return true
   } catch (error) {
-    console.error('FGA update roles error:', error)
+    console.error('❌ FGA update roles error:', error)
+    if (error instanceof Error) {
+      console.error('Error message:', error.message)
+      console.error('Error stack:', error.stack)
+    }
     return false
   }
 }

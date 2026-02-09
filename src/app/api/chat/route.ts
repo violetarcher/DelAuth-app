@@ -47,7 +47,16 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json()
-    const { messages, organizationId, cibaVerified = false } = chatSchema.parse(body)
+    const { messages, organizationId, cibaVerified: clientCibaVerified = false } = chatSchema.parse(body)
+
+    // SECURITY: Never trust client-provided cibaVerified flag
+    // CIBA verification is ALWAYS handled server-side
+    // This ensures each operation requires fresh approval
+    const cibaVerified = false
+
+    if (clientCibaVerified) {
+      console.warn('⚠️ Client attempted to set cibaVerified=true, ignoring for security')
+    }
 
     const client = getOpenAIClient()
 
@@ -60,13 +69,19 @@ export async function POST(request: NextRequest) {
       userName,
     }
 
+    // Limit conversation context to last 20 messages to prevent old operations from interfering
+    // This keeps recent context but prevents the agent from getting confused by operations
+    // that happened many messages ago
+    const maxContextMessages = 20
+    const recentMessages = messages.slice(-maxContextMessages)
+
     // Prepare messages for OpenAI
     const openaiMessages = [
       {
         role: 'system' as const,
         content: getSystemPrompt(organizationId, userId),
       },
-      ...messages.map((msg) => ({
+      ...recentMessages.map((msg) => ({
         role: msg.role,
         content: msg.content || '',
         tool_calls: msg.tool_calls,
@@ -88,6 +103,28 @@ export async function POST(request: NextRequest) {
 
     // Check if the model wants to call functions
     if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
+      console.log(`\n🤖 OpenAI wants to execute ${responseMessage.tool_calls.length} tool call(s)`)
+      console.log(`Tool calls:`, JSON.stringify(responseMessage.tool_calls, null, 2))
+
+      // Detect duplicate tool calls (likely a hallucination or confusion)
+      const toolCallTypes = responseMessage.tool_calls.map(tc => tc.function.name)
+      const duplicates = toolCallTypes.filter((item, index) => toolCallTypes.indexOf(item) !== index)
+      if (duplicates.length > 0) {
+        console.warn(`⚠️ WARNING: Duplicate tool calls detected:`, duplicates)
+        console.warn(`⚠️ This suggests the agent is confused. Only executing the first instance.`)
+
+        // Remove duplicate tool calls - keep only the first occurrence of each type
+        const seenTypes = new Set<string>()
+        responseMessage.tool_calls = responseMessage.tool_calls.filter(tc => {
+          if (seenTypes.has(tc.function.name)) {
+            console.warn(`⚠️ Skipping duplicate call to ${tc.function.name}`)
+            return false
+          }
+          seenTypes.add(tc.function.name)
+          return true
+        })
+      }
+
       // Execute all tool calls
       const toolResults = []
 
@@ -124,9 +161,12 @@ export async function POST(request: NextRequest) {
 
       if (cibaRequired && !cibaVerified) {
         // Handle CIBA verification server-side
-        const cibaResult = toolResults.find((r) => r.result.requiresCIBA)
+        const cibaResultIndex = toolResults.findIndex((r) => r.result.requiresCIBA)
+        const cibaResult = toolResults[cibaResultIndex]
+        const cibaToolCall = responseMessage.tool_calls![cibaResultIndex]
 
         console.log('🔐 CIBA required, initiating Guardian Push...')
+        console.log('CIBA tool call:', cibaToolCall.function.name, cibaToolCall.id)
 
         // Send immediate response to inform user
         const encoder = new TextEncoder()
@@ -140,7 +180,7 @@ export async function POST(request: NextRequest) {
               // Initiate CIBA flow
               const cibaResponse = await completeCIBAFlow(
                 userId,
-                `Approve: ${cibaResult?.result.cibaOperation}`
+                `Approve: ${cibaResult.result.cibaOperation}`
               )
 
               if (!cibaResponse.success) {
@@ -153,17 +193,20 @@ export async function POST(request: NextRequest) {
               console.log('✅ CIBA approved, retrying operation...')
               controller.enqueue(encoder.encode('✅ Guardian Push approved! Executing operation...\n\n'))
 
-              // Retry the tool with CIBA verification
+              // Retry the specific tool that required CIBA
               const retryResult = await executeTool(
-                responseMessage.tool_calls![0].function.name,
-                JSON.parse(responseMessage.tool_calls![0].function.arguments),
+                cibaToolCall.function.name,
+                JSON.parse(cibaToolCall.function.arguments),
                 context,
                 true // cibaVerified
               )
 
               console.log('Tool result after CIBA:', JSON.stringify(retryResult, null, 2))
 
-              // Build messages with tool results
+              // Update the toolResults array with the successful retry
+              toolResults[cibaResultIndex].result = retryResult
+
+              // Build messages with ALL tool results (required by OpenAI)
               const finalMessages = [
                 ...openaiMessages,
                 {
@@ -171,11 +214,12 @@ export async function POST(request: NextRequest) {
                   content: responseMessage.content || '',
                   tool_calls: responseMessage.tool_calls,
                 },
-                {
+                // Add tool responses for ALL tool calls
+                ...toolResults.map((tr) => ({
                   role: 'tool' as const,
-                  tool_call_id: responseMessage.tool_calls![0].id,
-                  content: JSON.stringify(retryResult),
-                },
+                  tool_call_id: tr.tool_call_id,
+                  content: JSON.stringify(tr.result),
+                })),
               ]
 
               // Get final response from OpenAI
@@ -195,9 +239,11 @@ export async function POST(request: NextRequest) {
               }
 
               controller.close()
-            } catch (error) {
+            } catch (error: any) {
               console.error('CIBA flow error:', error)
-              const errorMsg = '❌ An error occurred during verification. Please try again.\n'
+              const errorDetails = error?.message || error?.toString() || 'Unknown error'
+              console.error('Error details:', errorDetails)
+              const errorMsg = `❌ An error occurred during verification: ${errorDetails}\n\nPlease try again.\n`
               controller.enqueue(encoder.encode(errorMsg))
               controller.close()
             }

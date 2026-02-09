@@ -433,6 +433,124 @@ Organization Roles from FGA:
 
 ---
 
+### Agent Role Selection Fix (February 9, 2026)
+
+**Fixed critical bug: Agent reusing roles from previous update operations**
+
+#### The Problem
+When updating member roles multiple times in a conversation, the agent would sometimes reuse role selections from earlier updates instead of asking for fresh input each time. This happened because:
+- The `roles` parameter was marked as **required** in the tool schema
+- OpenAI was forced to provide a value, so it pulled from conversation history
+- No validation checked if roles came from the current message
+
+#### The Fix
+Implemented multi-layer protection to ensure fresh role selection:
+
+1. **Made roles parameter optional** (`src/lib/agent/tools.ts:1373`)
+   ```typescript
+   required: ['userId']  // removed 'roles' from required array
+   ```
+
+2. **Enhanced tool description** (`src/lib/agent/tools.ts:1359`)
+   - Added: "CRITICAL: If user does NOT explicitly specify roles IN THE CURRENT MESSAGE..."
+   - Added: "NEVER use roles from previous messages or earlier in conversation"
+   - Added: "NEVER call this tool without explicit roles in the current user message"
+
+3. **Enhanced parameter description** (`src/lib/agent/tools.ts:1370`)
+   - Added: "CRITICAL: Must come from the CURRENT user message only"
+   - Added: "If not provided in current message, DO NOT call this tool - ask user first"
+
+4. **Added function-level validation** (`src/lib/agent/tools.ts:619-626`)
+   ```typescript
+   if (!roles || roles.length === 0) {
+     return {
+       success: false,
+       error: 'AGENT_ERROR: Roles not provided. You must ask the user which roles to assign...'
+     }
+   }
+   ```
+
+5. **Enhanced system prompt** (`src/lib/openai/client.ts:145-150`)
+   - Added explicit rules for when to ask for roles on updates
+   - Emphasized never reusing roles from conversation history
+
+#### Behavior Change
+
+**Before (buggy):**
+```
+User: "Update roles for member1@example.com to admin"
+Agent: [Updates to admin]
+User: "Update roles for member2@example.com"
+Agent: [Incorrectly uses "admin" from previous message] ❌
+```
+
+**After (fixed):**
+```
+User: "Update roles for member1@example.com to admin"
+Agent: [Updates to admin]
+User: "Update roles for member2@example.com"
+Agent: [Gets validation error from tool]
+Agent: "Which role(s) would you like to assign to member2@example.com?..." ✅
+User: "support"
+Agent: [Updates to support correctly] ✅
+```
+
+#### Impact
+- **Safe operations**: Each update requires explicit, fresh role selection
+- **No silent mistakes**: Agent cannot accidentally apply wrong roles
+- **Clear UX**: Users always confirm roles before sensitive operations
+- **Multi-layer protection**: Schema + description + validation ensures compliance
+
+---
+
+### FGA Activity Logging Optimization (February 9, 2026)
+
+**Reduced console noise from high-frequency polling endpoint**
+
+#### The Problem
+The FGA Activity Monitor polls `/api/fga/activities` every second to show real-time authorization operations. This created excessive console logs during development:
+- 60+ requests per minute in dev console
+- Cluttered terminal output with `GET /api/fga/activities 200`
+- Made it hard to spot actual errors and important logs
+
+#### The Fix
+
+1. **Increased polling interval** (`src/components/fga/FGAActivityPanel.tsx:66`)
+   - Changed from 1 second to 2 seconds
+   - Reduces request frequency by 50%
+
+2. **Added suppression header** (`src/components/fga/FGAActivityPanel.tsx:30`)
+   ```typescript
+   headers: {
+     'X-Suppress-Logs': 'true'
+   }
+   ```
+
+3. **Conditional logging in API route** (`src/app/api/fga/activities/route.ts:19-24`)
+   ```typescript
+   const suppressLogs = request.headers.get('X-Suppress-Logs') === 'true'
+   if (!suppressLogs) {
+     console.error('FGA activities error:', error)
+   }
+   ```
+
+4. **Updated Next.js config** (`next.config.js`)
+   - Added logging configuration for fetch behavior
+
+#### Impact
+- **50% fewer requests**: From 60/min to 30/min
+- **Clean console**: Only errors logged, not successful polls
+- **Better DX**: Easier to spot actual issues during development
+- **Network tab still works**: Requests visible in DevTools Network panel when needed
+
+#### Additional Options
+Users can further reduce noise by:
+- Toggling off "Auto" refresh in FGA Activity Monitor when not actively monitoring
+- Using browser console filters: `-/api/fga/activities`
+- Terminal filters for server logs
+
+---
+
 ## Previous Updates (February 6, 2026)
 
 ### Member Management & FGA Sync Fix

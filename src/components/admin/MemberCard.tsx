@@ -1,6 +1,8 @@
 'use client'
 
 import { useState } from 'react'
+import { ClipboardDocumentIcon, CheckIcon } from '@heroicons/react/24/outline'
+import toast from 'react-hot-toast'
 import { Card } from '../ui/Card'
 import { Badge } from '../ui/Badge'
 import { ActionButtons } from './ActionButtons'
@@ -15,6 +17,18 @@ interface MemberCardProps {
 
 export function MemberCard({ member, organizationId, onUpdate }: MemberCardProps) {
   const [updateRolesModalOpen, setUpdateRolesModalOpen] = useState(false)
+  const [copied, setCopied] = useState(false)
+
+  const handleCopyUserId = async () => {
+    try {
+      await navigator.clipboard.writeText(member.user_id)
+      setCopied(true)
+      toast.success('User ID copied to clipboard', { duration: 2000 })
+      setTimeout(() => setCopied(false), 2000)
+    } catch (error) {
+      toast.error('Failed to copy user ID')
+    }
+  }
 
   const getRoleBadgeVariant = (role: string) => {
     switch (role) {
@@ -59,10 +73,23 @@ export function MemberCard({ member, organizationId, onUpdate }: MemberCardProps
 
               <p className="text-xs text-gray-500 truncate mt-0.5">{member.email}</p>
 
-              {/* User ID - Compact */}
-              <p className="text-xs text-gray-400 truncate font-mono mb-1">
-                {member.user_id}
-              </p>
+              {/* User ID - Compact with Copy Button */}
+              <div className="flex items-center gap-1.5 mb-1">
+                <p className="text-xs text-gray-400 truncate font-mono">
+                  {member.user_id}
+                </p>
+                <button
+                  onClick={handleCopyUserId}
+                  className="flex-shrink-0 p-0.5 rounded hover:bg-gray-100 transition-colors"
+                  title="Copy User ID"
+                >
+                  {copied ? (
+                    <CheckIcon className="h-3.5 w-3.5 text-green-600" />
+                  ) : (
+                    <ClipboardDocumentIcon className="h-3.5 w-3.5 text-gray-400 hover:text-blue-600" />
+                  )}
+                </button>
+              </div>
 
               {/* Auth0 RBAC Roles */}
               {member.roles && member.roles.length > 0 && (

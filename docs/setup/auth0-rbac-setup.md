@@ -1,5 +1,7 @@
 # Auth0 RBAC Implementation Guide
 
+> **⚠️ LEGACY/OPTIONAL:** This approach uses Auth0 Actions and custom scopes for authorization. The recommended approach is **FGA-only** (see [fga-setup.md](fga-setup.md)) which is simpler and more flexible. This guide is kept for reference if you need to implement traditional RBAC with scoped tokens.
+
 ## Overview
 This guide implements Role-Based Access Control (RBAC) for the delegated administration app using Auth0 Roles at the organization level. User roles determine which Management API scopes are granted.
 
